@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# PyInstaller
+build/
+dist/
+
+# Runtime artifacts
+*.log
+limpiador_cache.json
+
+# Personal backups
+_backup_*/
+*.bak-*
+
+# Tooling / environments
+.opencode/
+.venv/
+venv/
