@@ -1,10 +1,13 @@
-"""LimpiaPro - Limpiador de sistema estilo CCleaner para uso personal.
+"""LimpiaPro - CCleaner-style system cleaner for personal use.
 
-La logica vive en limpiapro.* y la interfaz en limpiapro.ui.*.
-El punto de entrada es limpiador.py (compatible con LimpiaPro.bat y
+The logic lives in limpiapro.* and the interface in limpiapro.ui.*.
+The entry point is limpiador.py (kept compatible with LimpiaPro.bat and
 LimpiaPro.spec).
 """
 
 APP_NAME = "LimpiaPro"
 APP_VERSION = "2.1"
+
+# Read chunk size for full-file hashing (duplicates module). 1 MiB keeps
+# the per-call Python overhead negligible while hashlib updates in C.
 BLOCK_SIZE = 1024 * 1024

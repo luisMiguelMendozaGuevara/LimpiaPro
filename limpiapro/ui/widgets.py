@@ -1,4 +1,10 @@
-"""Widgets y helpers compartidos de la interfaz."""
+"""Shared UI widgets and helpers.
+
+Threading model: worker threads never touch tkinter directly. run_async
+executes the worker on a daemon thread and marshals the result back through
+a thread-safe queue that a single poller (start_ui_poller) drains on the UI
+thread. tkinter does not guarantee widget.after() from secondary threads,
+which is why every thread -> UI hop goes through post_ui."""
 
 import queue
 import threading
@@ -8,21 +14,26 @@ from tkinter import messagebox, ttk
 import customtkinter as ctk
 
 from .. import APP_NAME
+from ..i18n import t
 from ..utils import _errlog
 
 
-# Cola thread-safe para ejecutar callbacks en el hilo de la UI. tkinter no
-# garantiza widget.after() desde hilos; un unico poller la drena.
+# Thread-safe queue used to run callbacks on the UI thread. A single
+# poller drains it; see start_ui_poller.
 _UI_QUEUE = queue.Queue()
 
 
 def post_ui(fn):
-    """Programa `fn` para ejecutarse en el hilo de la UI (thread-safe)."""
+    """Schedule `fn` to run on the UI thread (thread-safe)."""
     _UI_QUEUE.put(fn)
 
 
 def start_ui_poller(widget, interval=50):
-    """Arranca el poller unico de post_ui sobre `widget`."""
+    """Start the single post_ui poller on `widget`.
+
+    Every `interval` ms the queue is drained (callbacks run on the UI
+    thread) and the poller reschedules itself. Callback exceptions are
+    logged instead of killing the poller loop."""
     def _poll():
         try:
             while True:
@@ -30,7 +41,7 @@ def start_ui_poller(widget, interval=50):
                 try:
                     fn()
                 except Exception as e:
-                    _errlog(f"callback de UI fallo: {e!r}")
+                    _errlog(f"UI callback failed: {e!r}")
         except queue.Empty:
             pass
         try:
@@ -41,21 +52,21 @@ def start_ui_poller(widget, interval=50):
 
 
 def run_async(widget, worker, done, args=(), on_error=None):
-    """Ejecuta worker(*args) en un hilo y llama done(*resultado) en la UI.
+    """Run worker(*args) on a thread and call done(*result) on the UI.
 
-    Contrato: worker devuelve la tupla de argumentos de done. Si el worker
-    revienta, se registra en el log de errores y se invoca on_error()
-    (en la UI) si se facilito, para que el llamador pueda deshacer el
-    estado busy y marcar el error."""
+    Contract: the worker returns the tuple of arguments for done. If the
+    worker raises, the error is logged and on_error(e) is invoked (on the
+    UI thread) when provided, so the caller can undo its busy state and
+    surface the failure."""
     def _thread():
         try:
             result = worker(*args)
         except Exception as e:
-            _errlog(f"worker fallo ({getattr(worker, '__name__', worker)}): {e!r}")
+            _errlog(f"worker failed ({getattr(worker, '__name__', worker)}): {e!r}")
             if on_error is not None:
-                # Capturamos `e` como default argument: `except` borra la
-                # variable de excepcion al salir del bloque, y el lambda
-                # programado en la UI se ejecuta mas tarde.
+                # Capture `e` as a default argument: the `except` clause
+                # deletes the exception variable when the block ends, and
+                # the lambda scheduled for the UI runs later.
                 post_ui(lambda e=e: on_error(e))
             return
         post_ui(lambda: done(*result))
@@ -63,10 +74,10 @@ def run_async(widget, worker, done, args=(), on_error=None):
 
 
 def make_tree(parent, spec, style="Dup.Treeview"):
-    """Treeview + scrollbar vertical con estilo comun.
+    """Treeview + vertical scrollbar with the shared style.
 
-    spec: lista de (columna, encabezado, ancho[, anclaje]); la primera
-    entrada describe la columna de arbol (#0). Devuelve el treeview."""
+    spec: list of (column, heading, width[, anchor]); the first entry
+    describes the tree column (#0). Returns the treeview."""
     cols = tuple(s[0] for s in spec[1:])
     tree = ttk.Treeview(parent, columns=cols, show="tree", style=style)
     tree.heading("#0", text=spec[0][1])
@@ -83,14 +94,15 @@ def make_tree(parent, spec, style="Dup.Treeview"):
 
 
 def fill_tree(tree, specs, chunk=200):
-    """Llena un Treeview en lotes (no congela la UI con miles de inserts).
+    """Populate a Treeview in batches (thousands of row-by-row inserts
+    would freeze the UI).
 
-    `specs` es una lista de tuplas (iid, parent, text, values, kw):
-      - iid: identificador del item ('' deja que ttk lo asigne; para
-        selected_one/selected_many lo uso como indice en la lista de datos).
-      - parent: iid del item padre, o '' para raiz.
-      - kw: dict opcional (tags, image, open, ...).
-    Conserva el esquema de iid enteros que usan selected_one/selected_many."""
+    `specs` is a list of tuples (iid, parent, text, values, kw):
+      - iid: item identifier ('' lets ttk assign one; selected_one /
+        selected_many use it as an index into the data list).
+      - parent: iid of the parent item, or '' for root.
+      - kw: optional dict (tags, image, open, ...).
+    Preserves the integer-iid scheme used by selected_one/selected_many."""
     tree.delete(*tree.get_children())
     total = len(specs)
     if not total:
@@ -116,38 +128,38 @@ def fill_tree(tree, specs, chunk=200):
 
 
 def selected_one(tree, data):
-    """Entrada de `data` para la seleccion de `tree`, o None.
+    """Entry of `data` for the tree's selection, or None.
 
-    Robusto frente a refrescos que desincronizan los iid del arbol."""
+    Robust against refreshes that desynchronize the tree iids."""
     sel = tree.selection()
     if not sel:
-        messagebox.showinfo(APP_NAME, "Selecciona un elemento en la lista.")
+        messagebox.showinfo(APP_NAME, t("msg.select_one"))
         return None
     try:
         return data[int(sel[0])]
     except (ValueError, IndexError):
         messagebox.showerror(
-            APP_NAME, "Error: no se pudo localizar el elemento seleccionado.")
+            APP_NAME, t("msg.select_one_error"))
         return None
 
 
 def selected_many(tree, data):
-    """Como selected_one pero con la seleccion multiple completa."""
+    """Like selected_one but with the complete multi-selection."""
     sel = tree.selection()
     if not sel:
-        messagebox.showinfo(APP_NAME, "Selecciona un elemento en la lista.")
+        messagebox.showinfo(APP_NAME, t("msg.select_one"))
         return None
     try:
         return [data[int(iid)] for iid in sel]
     except (ValueError, IndexError):
         messagebox.showerror(
-            APP_NAME, "Error: no se pudo localizar la seleccion.")
+            APP_NAME, t("msg.select_many_error"))
         return None
 
 
 def readonly_scrolled(parent):
-    """Textbox monospace de solo lectura dentro de un frame transparente.
-    Devuelve (frame, box); el box debe escribirse con state='normal'."""
+    """Readonly monospace textbox inside a transparent frame.
+    Returns (frame, box); the box must be written with state='normal'."""
     frame = ctk.CTkFrame(parent, fg_color="transparent")
     box = ctk.CTkTextbox(frame, font=ctk.CTkFont(family="Consolas", size=11))
     box.pack(side="left", fill="both", expand=True)
@@ -156,8 +168,8 @@ def readonly_scrolled(parent):
 
 
 def readonly_toplevel(master, title, geometry, header=None):
-    """Ventana Toplevel con cabecera opcional y textbox de solo lectura.
-    Devuelve (win, box)."""
+    """Toplevel window with optional header and a readonly textbox.
+    Returns (win, box)."""
     win = ctk.CTkToplevel(master)
     win.title(title)
     win.geometry(geometry)
@@ -170,7 +182,7 @@ def readonly_toplevel(master, title, geometry, header=None):
 
 
 def confirm_destructive(title, details, extra=""):
-    """Dialogo de confirmacion destruccion. Cierra (cierra el parent).
-    Devuelve True/False."""
-    msg = f"{details}\n\n{extra}\nContinuar?" if extra else f"{details}\n\nContinuar?"
+    """Destructive-action confirmation dialog. Returns True/False."""
+    msg = (f"{details}\n\n{extra}\n{t('ui.continue_q')}" if extra
+           else f"{details}\n\n{t('ui.continue_q')}")
     return messagebox.askyesno(APP_NAME, msg, parent=None, icon="warning")

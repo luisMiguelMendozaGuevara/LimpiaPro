@@ -1,7 +1,7 @@
-"""Punto de entrada de LimpiaPro.
+"""LimpiaPro entry point.
 
-El codigo vive en el paquete `limpiapro`; este archivo se mantiene como
-entrada para que LimpiaPro.bat y LimpiaPro.spec sigan funcionando igual."""
+The code lives in the `limpiapro` package; this file remains the entry
+point so LimpiaPro.bat and LimpiaPro.spec keep working unchanged."""
 
 import sys
 

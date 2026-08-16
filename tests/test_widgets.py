@@ -1,8 +1,7 @@
-"""Tests del contrato run_async/post_ui sin Tk real.
+"""Tests for the run_async/post_ui contract without a real Tk window.
 
-No se crea ninguna ventana; se drena manualmente _UI_QUEUE (o se
-monkeypatchea post_ui) para aislar la logica de programacion de callbacks.
-"""
+No window is created; _UI_QUEUE is drained manually (or post_ui is
+monkeypatched) to isolate the callback-scheduling logic."""
 
 import threading
 import time
@@ -13,8 +12,8 @@ from limpiapro.ui import widgets
 
 
 @pytest.fixture(autouse=True)
-def _cola_limpia():
-    """Los threads de run_async pueden quedar residuos en la cola."""
+def _clean_queue():
+    """run_async threads can leave residues in the queue."""
     while True:
         try:
             widgets._UI_QUEUE.get_nowait()
@@ -28,8 +27,8 @@ def _cola_limpia():
             break
 
 
-def _drenar_cola():
-    """Ejecuta en este hilo todos los callbacks pendientes de la UI."""
+def _drain_queue():
+    """Run every pending UI callback on this thread."""
     while True:
         try:
             fn = widgets._UI_QUEUE.get_nowait()
@@ -38,90 +37,90 @@ def _drenar_cola():
         fn()
 
 
-def test_post_ui_encola_y_pasa_por_cola():
-    recibidos = []
-    widgets.post_ui(lambda: recibidos.append("a"))
-    widgets.post_ui(lambda: recibidos.append("b"))
-    assert recibidos == []  # aun no se ha drenado
-    _drenar_cola()
-    assert recibidos == ["a", "b"]
+def test_post_ui_enqueues_through_the_queue():
+    received = []
+    widgets.post_ui(lambda: received.append("a"))
+    widgets.post_ui(lambda: received.append("b"))
+    assert received == []  # nothing drained yet
+    _drain_queue()
+    assert received == ["a", "b"]
 
 
-def _esperar(cond, timeout=5.0):
-    fin = time.time() + timeout
-    while time.time() < fin:
+def _wait(cond, timeout=5.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
         if cond():
             return True
         time.sleep(0.01)
     return False
 
 
-def test_run_async_worker_ok_llama_done_con_tupla():
-    resultados = []
+def test_run_async_worker_ok_calls_done_with_tuple():
+    results = []
 
     def worker(a, b):
         return a + b, a * b
 
-    def done(suma, prod):
-        resultados.append((suma, prod))
+    def done(total, product):
+        results.append((total, product))
 
     widgets.run_async(None, worker, done, args=(3, 4))
-    assert _esperar(lambda: widgets._UI_QUEUE.qsize() >= 1)
-    _drenar_cola()
-    assert _esperar(lambda: resultados)
-    assert resultados == [(7, 12)]
+    assert _wait(lambda: widgets._UI_QUEUE.qsize() >= 1)
+    _drain_queue()
+    assert _wait(lambda: results)
+    assert results == [(7, 12)]
 
 
-def test_run_async_worker_error_hace_post_ui_de_on_error(monkeypatch):
-    errores = []
+def test_run_async_worker_error_posts_on_error(monkeypatch):
+    errors = []
     done_calls = []
     monkeypatch.setattr(widgets, "_errlog", lambda msg: None)
 
     def worker():
-        raise ValueError("fallo interno")
+        raise ValueError("internal failure")
 
     def done(*_a):
         done_calls.append(1)
 
     def on_error(e):
-        errores.append(e)
+        errors.append(e)
 
     widgets.run_async(None, worker, done, on_error=on_error)
-    assert _esperar(lambda: widgets._UI_QUEUE.qsize() >= 1)
-    _drenar_cola()
-    assert _esperar(lambda: errores)
-    assert len(done_calls) == 0  # done NO se invoca si el worker fallo
-    assert isinstance(errores[0], ValueError)
+    assert _wait(lambda: widgets._UI_QUEUE.qsize() >= 1)
+    _drain_queue()
+    assert _wait(lambda: errors)
+    assert len(done_calls) == 0  # done is NOT invoked when the worker failed
+    assert isinstance(errors[0], ValueError)
 
 
-def test_run_async_on_error_none_no_produce_callback(monkeypatch):
+def test_run_async_no_on_error_leaves_queue_empty(monkeypatch):
     logs = []
     monkeypatch.setattr(widgets, "_errlog", lambda msg: logs.append(msg))
 
     def worker():
-        raise ValueError("sin on_error")
+        raise ValueError("no on_error")
 
     widgets.run_async(None, worker, lambda: None)
-    # El worker reventara y, al no haber on_error, la cola queda sin
-    # callbacks: solo debe llegar el registro del error en el log.
-    assert _esperar(lambda: logs)
-    assert "worker fallo" in logs[0]
+    # The worker will blow up and, with no on_error, the queue stays
+    # callback-free: only the error log entry should appear.
+    assert _wait(lambda: logs)
+    assert "worker failed" in logs[0]
     assert widgets._UI_QUEUE.empty()
 
 
-def test_start_ui_poller_drena_en_intervalo():
-    ejecutados = []
-    pendientes = []
+def test_start_ui_poller_drains_on_interval():
+    executed = []
+    pending = []
 
-    class _FalsoWidget:
+    class _FakeWidget:
         def after(self, _ms, fn=None):
-            pendientes.append(fn)
+            pending.append(fn)
 
-    widgets.post_ui(lambda: ejecutados.append("echo"))
-    widgets.start_ui_poller(_FalsoWidget(), interval=0)
-    # El poller programa su tick via after(); lo ejecutamos manualmente
-    # (el fake no corre callbacks por si solo para evitar recursividad).
-    assert _esperar(lambda: pendientes)
-    pendientes.pop()()          # primer _poll
-    assert "echo" in ejecutados
-    assert pendientes            # el poller se reprogramo a si mismo
+    widgets.post_ui(lambda: executed.append("echo"))
+    widgets.start_ui_poller(_FakeWidget(), interval=0)
+    # The poller schedules its tick via after(); we run it manually
+    # (the fake does not run callbacks on its own, avoiding recursion).
+    assert _wait(lambda: pending)
+    pending.pop()()          # first _poll
+    assert "echo" in executed
+    assert pending            # the poller rescheduled itself

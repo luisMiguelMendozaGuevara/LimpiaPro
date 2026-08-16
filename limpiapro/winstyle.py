@@ -1,6 +1,6 @@
-"""Estilo Fluent (Windows 11): fondo Mica, color de acento, fuentes e
-iconos de aplicaciones extraidos con GDI+ via ctypes (sin dependencias
-externas)."""
+"""Fluent style (Windows 11): Mica backdrop, system accent color, fonts
+and application icons extracted with GDI+ through ctypes (no external
+dependencies)."""
 
 import base64
 import ctypes
@@ -20,6 +20,7 @@ FONT_FAMILY_FALLBACK = "Segoe UI"
 
 
 def _win_version_build():
+    """Windows build number (last component of platform.version())."""
     try:
         return int(platform.version().split(".")[-1])
     except Exception:
@@ -27,8 +28,8 @@ def _win_version_build():
 
 
 def apply_mica_backdrop(window):
-    """Aplica el material Mica (translucido, estilo Windows 11) a la ventana.
-    Requiere Windows 11 22H2+ (build 22621+). Si no hay soporte, no hace nada."""
+    """Apply the Mica material (translucent, Windows 11 style) to a
+    window. Requires Windows 11 22H2+ (build 22621+); a no-op otherwise."""
     try:
         build = _win_version_build()
         if build < 22621:
@@ -46,13 +47,13 @@ def apply_mica_backdrop(window):
 
 
 def get_system_accent():
-    """Lee el color de acento de Windows (DWM) como hex #RRGGBB.
-    Devuelve un azul Fluent (#0067c0) si no se puede leer."""
+    """Read the Windows accent color (DWM) as #RRGGBB. Returns the Fluent
+    blue (#0067c0) when it cannot be read."""
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
                             r"Software\Microsoft\Windows\DWM") as key:
             val, _ = winreg.QueryValueEx(key, "AccentColor")
-        # DWORD en formato 0x00BBGGRR -> convertir a #RRGGBB
+        # DWORD stored as 0x00BBGGRR -> convert to #RRGGBB
         r = (val >> 16) & 0xFF
         g = (val >> 8) & 0xFF
         b = val & 0xFF
@@ -65,10 +66,10 @@ _FONT_CACHE = {}
 
 
 def fluent_font(size=13, weight="normal"):
-    """Fuente Segoe UI Variable con fallback a Segoe UI.
+    """Segoe UI Variable font with fallback to Segoe UI.
 
-    La instancia CTkFont se cachea por (size, weight): crearla es costoso
-    y ademas mantiene referencias vivas que tkinter necesita."""
+    CTkFont instances are cached by (size, weight): creating them is
+    expensive and tkinter also needs the references kept alive."""
     key = (size, weight)
     font = _FONT_CACHE.get(key)
     if font is None:
@@ -78,10 +79,11 @@ def fluent_font(size=13, weight="normal"):
 
 
 # --------------------------------------------------------------------------
-# Iconos de aplicaciones (GDI+ via ctypes)
+# Application icons (GDI+ via ctypes)
 # --------------------------------------------------------------------------
 
 class _GdiplusStartupInput(ctypes.Structure):
+    """GDI+ initialization parameters (version 1, default callbacks)."""
     _fields_ = [('GdiplusVersion', ctypes.c_ulong),
                 ('DebugEventCallback', ctypes.c_void_p),
                 ('SuppressBackgroundThread', ctypes.c_bool),
@@ -93,7 +95,7 @@ _PNG_CLSID = (ctypes.c_ubyte * 16)(0x06, 0xF4, 0x7C, 0x55, 0x04, 0x1A, 0xD3, 0x1
 
 
 def _extract_exe_from_command(command):
-    """Extrae la ruta del ejecutable de un comando de inicio."""
+    """Executable path of a startup command (None when unparseable)."""
     argv, _err = split_command(command)
     if argv:
         return argv[0]
@@ -101,8 +103,14 @@ def _extract_exe_from_command(command):
 
 
 def get_file_icon_png(target, size=16):
-    """Devuelve bytes PNG (tamano `size`) del icono de un archivo/carpeta/acceso
-    directo. Usa la API de Windows (SHGetFileInfo + GDI+). None si falla."""
+    """PNG bytes (`size` x `size`) of a file/folder/shortcut icon, using
+    the Windows API (SHGetFileInfo + GDI+). None on failure.
+
+    Pipeline per call: SHGetFileInfoW gives an HICON; GDI+ converts it to
+    a bitmap, downscales with HQ bicubic when needed and encodes to PNG
+    through a temp file (GDI+ has no in-memory PNG encoder binding here).
+    Every handle is released in finally blocks; extraction is meant to be
+    called off the UI thread (see IconCache)."""
     try:
         if not target or not os.path.exists(os.path.expandvars(target)):
             return None
@@ -139,7 +147,7 @@ def get_file_icon_png(target, size=16):
                 tmp = os.path.join(tempfile.gettempdir(),
                                    f"lp_icon_{os.getpid()}.png")
                 try:
-                    # Redimensionar a `size` x `size` si el icono es mayor
+                    # Downscale to `size` x `size` when the icon is larger.
                     w = ctypes.c_uint()
                     gdiplus.GdipGetImageWidth(bitmap, ctypes.byref(w))
                     if w.value > size:
@@ -174,25 +182,29 @@ def get_file_icon_png(target, size=16):
 
 
 class IconCache:
-    """Cache de PhotoImage de iconos por ruta (evita re-extraer y mantiene
-    referencias vivas, necesario para que tkinter no las recoja).
+    """PhotoImage cache keyed by target path (avoids re-extracting icons
+    and keeps the references alive -- tkinter garbage-collects images that
+    lose their last Python reference).
 
-    La extraccion de bytes PNG se hace fuera del hilo de UI
-    (get_file_icon_png); los PhotoImage se crean siempre desde el hilo UI
-    via _photo."""
+    PNG bytes are extracted off the UI thread (get_file_icon_png is
+    called from workers); PhotoImages are always created on the UI thread
+    through _photo."""
 
     def __init__(self, size=16):
         self.cache = {}
         self.size = size
 
     def _photo(self, png_bytes):
+        """Build a PhotoImage from PNG bytes (base64: what PhotoImage's
+        data= parameter expects; raw bytes raise)."""
         try:
-            # PhotoImage(data=...) espera base64, no bytes crudos.
             return _tk.PhotoImage(data=base64.b64encode(png_bytes))
         except Exception:
             return None
 
     def get(self, target):
+        """PhotoImage for a startup command's executable (None when the
+        command has no resolvable executable or extraction fails)."""
         if not target:
             return None
         path = os.path.expandvars(_extract_exe_from_command(target) or "")

@@ -16,6 +16,7 @@ Limpiador de sistema estilo CCleaner (uso personal). Interfaz grafica moderna co
 | `limpiador.py` | Punto de entrada (compatible con LimpiaPro.bat y LimpiaPro.spec) |
 | `limpiapro/__init__.py` | Constantes (APP_NAME, APP_VERSION, BLOCK_SIZE) |
 | `limpiapro/app.py` | CleanerApp, _errlog, main() |
+| `limpiapro/i18n.py` | Tabla de strings es/en, detect_language, t() |
 | `limpiapro/utils.py` | app_dir, is_admin, format_size, glob_like, _parallel_map, _folder_size, _fast_folder_stats, _delete_path, _safe_size |
 | `limpiapro/winstyle.py` | Mica, acento del sistema, fluent_font, iconos GDI+, IconCache |
 | `limpiapro/winapp2.py` | Parser winapp2.ini con Detect1..N, ExcludeKey, REMOVESELF |
@@ -38,14 +39,16 @@ Limpiador de sistema estilo CCleaner (uso personal). Interfaz grafica moderna co
 | `LimpiaPro.spec` | Spec de PyInstaller (one-file, sin consola, embebe datos de customtkinter) |
 | `LimpiaPro.bat` | Lanzador que ejecuta `limpiador.py` con el Python 3.12 |
 | `requirements-dev.txt` | pytest |
-| `tests/` | Tests de pytest (parser, categorias, duplicados, utilidades, desinstalador) |
+| `tests/` | Tests de pytest (parser, categorias, duplicados, utilidades, desinstalador, i18n, widgets, sistema) |
 | `limpiador_cache.json` | Cache de tamanos por categoria |
 | `limpiapro_error.log` | Log de errores (siempre al lado del exe/script) |
 | `limpiador.py.bak-*` | Backup del monolito original (antes del refactor) |
 
 ## Convenciones
 
-- Codigo y docstrings en espanol (sin acentos ni caracteres especiales en strings).
+- Codigo, comentarios y docstrings en ingles.
+- Strings de UI via claves i18n (`limpiapro/i18n.py`, espanol/ingles, valores ASCII sin acentos); el idioma se detecta de Windows (`GetUserDefaultUILanguage`, override con la variable `LIMPIAPRO_LANG`).
+- Los modulos backend devuelven mensajes estables en ingles/ASCII; la capa UI los traduce al mostrarlos con `t()`.
 - Patron de UI: `CleanerApp` como ventana raiz, paginas como clases `*Page(master, app)`.
 - Trabajo pesado en hilos con `_parallel_map` / `ThreadPoolExecutor`; UI actualizada desde el hilo principal.
 - Nunca bloquear el hilo de la UI con escaneos o borrados.

@@ -1,9 +1,12 @@
-"""Papelera de reciclaje.
+"""Recycle bin management.
 
-Se usa la API de shell (SHQueryRecycleBinW / SHEmptyRecycleBinW) que ya
-cuenta el tamano real de todas las unidades, incluyendo papeleras de otros
-SIDs. Si la API falla, se recae en el recuento por carpetas $Recycle.Bin.
-"""
+The shell API (SHQueryRecycleBinW / SHEmptyRecycleBinW) already reports
+the real size across all drives, including the bins of other user SIDs.
+If the API fails, the size falls back to walking the $Recycle.Bin folder
+of each drive.
+
+Backend rule: status messages returned here are stable English/ASCII; the
+UI layer translates user-facing text via i18n.t()."""
 
 import ctypes
 import os
@@ -13,6 +16,10 @@ from .utils import _folder_size
 
 
 class _SHQUERYRBINFO(ctypes.Structure):
+    """SHQUERYRBINFO: output struct of SHQueryRecycleBinW.
+
+    cbSize must be set to sizeof(struct) before the call; i64Size holds the
+    total bytes in the bin of the queried drive."""
     _fields_ = [
         ("cbSize", wintypes.DWORD),
         ("i64Size", ctypes.c_longlong),
@@ -21,7 +28,7 @@ class _SHQUERYRBINFO(ctypes.Structure):
 
 
 def _logical_drives():
-    """Letras de unidad con raiz (p.ej. 'C:\\')."""
+    """Drive letters with root path (e.g. 'C:\\') from GetLogicalDriveStringsW."""
     drives = []
     buf = ctypes.create_unicode_buffer(261)
     n = ctypes.windll.kernel32.GetLogicalDriveStringsW(len(buf), buf)
@@ -31,8 +38,8 @@ def _logical_drives():
 
 
 def _query_recycle_bin():
-    """Devuelve el tamano (en bytes) de la papelera con la API de shell,
-    o None si la llamada no esta disponible / falla."""
+    """Total size (bytes) of the recycle bin via the shell API, or None when
+    the call is unavailable / fails (the caller then uses the folder walk)."""
     try:
         info = _SHQUERYRBINFO()
         info.cbSize = ctypes.sizeof(_SHQUERYRBINFO)
@@ -50,10 +57,12 @@ def _query_recycle_bin():
 
 
 def recycle_bin_size():
+    """Size in bytes of the recycle bin (shell API first, folder walk as
+    fallback)."""
     size = _query_recycle_bin()
     if size is not None:
         return size
-    # fallback: recorrer las carpetas $Recycle.Bin de cada unidad
+    # fallback: walk the $Recycle.Bin folder of every drive
     total = 0
     for drive in _logical_drives():
         root = os.path.join(drive, "$Recycle.Bin")
@@ -63,13 +72,16 @@ def recycle_bin_size():
 
 
 def empty_recycle_bin():
+    """Empty the recycle bin of all drives. Returns (ok, msg) with a stable
+    English/ASCII detail string (translated for display by the UI).
+
+    SHERB_NOCONFIRMATION | SHERB_NOSOUND: the app already asked for
+    confirmation and must not play the emptying sound."""
     try:
-        # SHERB_NOCONFIRMATION | SHERB_NOSOUND: la app ya pide confirmacion
-        # y no debe reproducir el sonido de vaciado.
         flags = 0x00000001 | 0x00000004
         result = ctypes.windll.shell32.SHEmptyRecycleBinW(None, None, flags)
         if result in (0, 5):
-            return True, "Papelera vaciada."
-        return False, f"Error al vaciar papelera (codigo {result})."
+            return True, "Recycle bin emptied."
+        return False, f"Error emptying recycle bin (code {result})."
     except Exception as e:
         return False, str(e)

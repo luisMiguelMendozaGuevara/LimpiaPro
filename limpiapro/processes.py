@@ -1,4 +1,4 @@
-"""Procesos activos (tasklist / taskkill)."""
+"""Running processes (tasklist / taskkill)."""
 
 import csv
 import io
@@ -7,7 +7,10 @@ from .utils import _errlog, run_system_cmd
 
 
 def get_processes():
-    """Lista de procesos: {name, pid, mem, session, title}."""
+    """List running processes: {name, pid, mem, session, title}.
+
+    One batched tasklist query feeds the whole list; parse failures and
+    command errors are logged and yield []."""
     procs = []
     try:
         result = run_system_cmd(["tasklist", "/fo", "CSV", "/v"])
@@ -24,12 +27,12 @@ def get_processes():
                 "title": title.strip(),
             })
     except Exception as e:
-        _errlog(f"tasklist fallo: {e!r}")
+        _errlog(f"tasklist failed: {e!r}")
     return procs
 
 
 def kill_process(pid):
-    """Termina un proceso. Devuelve (ok, msg)."""
+    """Force-end a process. Returns (ok, msg)."""
     try:
         result = run_system_cmd(["taskkill", "/PID", str(pid), "/F"], timeout=30)
         msg = (result.stdout or result.stderr or "").strip()

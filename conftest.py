@@ -1,1 +1,1 @@
-# Conftest en la raiz: asegura que pytest pueda importar el paquete limpiapro.
+# Root conftest: ensures pytest can import the limpiapro package.

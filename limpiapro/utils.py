@@ -1,4 +1,4 @@
-"""Utilidades comunes: rutas, formato, borrado y medida de carpetas."""
+"""Common utilities: paths, formatting, deletion and folder measuring."""
 
 import ctypes
 import glob as globmod
@@ -10,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Generator, List, Optional, Tuple
 
-# Progreso: cada cuantos archivos se notifica en el escaneo.
+# Progress: how many files between scan notifications.
 PROGRESS_STATS = 500
 PROGRESS_RULES = 100
 PROGRESS_DELETE = 20
@@ -18,15 +18,17 @@ DEFAULT_WORKERS = 4
 
 
 def app_dir() -> str:
-    """Directorio de la aplicacion (funciona tambien empaquetada con
-    PyInstaller). En desarrollo es la raiz del proyecto, la carpeta que
-    contiene limpiador.py, winapp2.ini, la cache y el log."""
+    """Application directory (works packaged with PyInstaller too).
+
+    In development it is the project root: the folder holding
+    limpiador.py, winapp2.ini, the cache file and the error log."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def is_admin() -> bool:
+    """True when the process runs elevated (UAC administrator)."""
     try:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
@@ -34,6 +36,7 @@ def is_admin() -> bool:
 
 
 def format_size(num: float) -> str:
+    """Human-readable size (bytes -> KB/MB/...); '-' for negatives."""
     if isinstance(num, int) and num < 0:
         return "-"
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -44,15 +47,17 @@ def format_size(num: float) -> str:
 
 
 def glob_like(path: str) -> List[str]:
+    """glob.glob() when the path carries wildcards (*?[), else [path]
+    (no filesystem access for plain paths)."""
     if any(ch in path for ch in "*?["):
         return globmod.glob(path)
     return [path]
 
 
 def _parallel_map(func: Callable, items, workers: Optional[int] = None) -> list:
-    """Aplica func a cada item repartiendo el trabajo en hasta `workers`
-    hilos (por defecto 4). Devuelve los resultados en orden; None si una
-    tarea fallo. Se limita el numero de hilos para no saturar el disco."""
+    """Apply func to every item across up to `workers` threads (4 by
+    default). Results come back in order; a failed task yields None.
+    The thread count is capped to keep the disk from thrashing."""
     items = list(items)
     if not items:
         return []
@@ -74,9 +79,13 @@ def _parallel_map(func: Callable, items, workers: Optional[int] = None) -> list:
 
 
 def iter_file_sizes(folder: str) -> Generator[Tuple[str, int], None, None]:
-    """Generador que recorre una carpeta con os.scandir (stat cacheado) y
-    produce (ruta, tamano_bytes) por cada archivo regular. Mas rapido que
-    os.walk + getsize (una syscall menos por archivo)."""
+    """Generator walking a folder with os.scandir (cached stat) yielding
+    (path, size_bytes) per regular file. Faster than os.walk + getsize
+    (one syscall less per file).
+
+    Iterative (an explicit stack of scandir iterators) instead of
+    recursive to survive deep trees without hitting the recursion limit;
+    OSError on any entry just skips that subtree/file."""
     stack = []
     try:
         stack.append(os.scandir(folder))
@@ -103,8 +112,8 @@ def iter_file_sizes(folder: str) -> Generator[Tuple[str, int], None, None]:
 
 
 def _fast_folder_stats(folder: str, on_progress=None) -> Tuple[int, int]:
-    """Recorre una carpeta con os.scandir (stat cacheado) mucho mas rapido
-    que os.walk + getsize. Devuelve (tamano_bytes, num_archivos)."""
+    """Walk a folder with os.scandir (cached stat), much faster than
+    os.walk + getsize. Returns (size_bytes, file_count)."""
     total_size = 0
     total_files = 0
     for _path, size in iter_file_sizes(folder):
@@ -116,11 +125,14 @@ def _fast_folder_stats(folder: str, on_progress=None) -> Tuple[int, int]:
 
 
 def _folder_size(folder: str) -> int:
-    """Tamano total de una carpeta (scandir, stat cacheado)."""
+    """Total size of a folder (scandir, cached stat)."""
     return _fast_folder_stats(folder)[0]
 
 
 def _delete_path(path: str) -> bool:
+    """Delete a file or a whole folder tree. Returns True when the path is
+    gone afterwards (rmtree runs with ignore_errors, so the existence
+    check is the source of truth)."""
     try:
         if os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
@@ -132,6 +144,7 @@ def _delete_path(path: str) -> bool:
 
 
 def _safe_size(path: str) -> int:
+    """Size of a file or folder, 0 on any error (never raises)."""
     try:
         if os.path.isdir(path):
             return _folder_size(path)
@@ -141,8 +154,8 @@ def _safe_size(path: str) -> int:
 
 
 def _errlog(msg: str) -> None:
-    """Escribe en un archivo de error (app sin consola: si algo falla, que
-    quede registro)."""
+    """Append to the error log file (the app has no console: failures must
+    leave a trace). Developer-facing, English."""
     try:
         with open(os.path.join(app_dir(), "limpiapro_error.log"),
                   "a", encoding="utf-8") as f:
@@ -152,8 +165,8 @@ def _errlog(msg: str) -> None:
 
 
 def _oem_cp() -> str:
-    """Pagina de codigos OEM (cp850...): las herramientas de consola de
-    Windows (schtasks, tasklist) emiten ahi, no en UTF-8."""
+    """OEM code page (cp850...): Windows console tools (schtasks,
+    tasklist) emit there, not in UTF-8."""
     try:
         cp = ctypes.windll.kernel32.GetOEMCP()
         return str(int(cp) or 850)
@@ -162,11 +175,12 @@ def _oem_cp() -> str:
 
 
 def run_system_cmd(args: List[str], timeout: int = 60) -> subprocess.CompletedProcess:
-    """Ejecuta un comando de consola de Windows sin ventana, capturando
-    stdout/stderr decodificados con la pagina de codigos OEM.
+    """Run a Windows console command without a window, capturing
+    stdout/stderr decoded with the OEM code page.
 
-    Devuelve el subprocess.CompletedProcess (fields .returncode, .stdout,
-    .stderr). Corrige el mojibake de acentos en tareas/procesos."""
+    Returns the subprocess.CompletedProcess (.returncode, .stdout,
+    .stderr). Fixes the mojibake of accented characters in tasks and
+    processes (those tools write to the pipe in the OEM code page)."""
     return subprocess.run(
         args, capture_output=True, text=True,
         encoding=f"cp{_oem_cp()}", errors="replace",

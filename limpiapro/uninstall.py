@@ -1,5 +1,8 @@
-"""Desinstalador: apps instaladas, lanzamiento seguro de desinstaladores y
-busqueda de restos en disco y registro."""
+"""Uninstaller: installed apps, safe uninstaller launching and leftover
+search on disk and registry.
+
+Backend rule: every status message returned by this module is stable
+English/ASCII; the UI layer translates user-facing text via i18n.t()."""
 
 import os
 import re
@@ -7,8 +10,9 @@ import shlex
 import subprocess
 import winreg
 
-# Claves de sistema que nunca se proponen para borrar como "restos": son
-# too genericas y borrarlas romperia Windows u otras aplicaciones.
+# System key names that are never proposed for deletion as "leftovers":
+# they are too generic and removing them would break Windows or other
+# applications.
 _PROTECTED_KEY_NAMES = {
     "microsoft", "classes", "windows", "policies", "wow6432node",
     "currentversion", "commonfiles", "programfiles", "programfilesx86",
@@ -18,7 +22,12 @@ _PROTECTED_KEY_NAMES = {
 
 
 def get_installed_apps():
-    """Aplicaciones instaladas desde las claves Uninstall del registro."""
+    """List installed applications from the registry Uninstall keys.
+
+    Walks the three standard roots (HKLM, HKLM WOW6432Node, HKCU), reads
+    DisplayName/DisplayPublisher/UninstallString/InstallLocation/
+    EstimatedSize and deduplicates by (name, uninstall command). The result
+    is sorted case-insensitively by display name."""
     apps = []
     roots = [
         (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
@@ -71,6 +80,7 @@ def get_installed_apps():
 
 
 def _hive_name(hive):
+    """Short registry hive name ("HKCU"/"HKLM") for display in paths."""
     if hive == winreg.HKEY_CURRENT_USER:
         return "HKCU"
     if hive == winreg.HKEY_LOCAL_MACHINE:
@@ -79,7 +89,12 @@ def _hive_name(hive):
 
 
 def delete_registry_path(path):
-    """Elimina una clave de registro recursivamente. path: 'HKCU\\Software\\Foo'."""
+    """Recursively delete a registry key. path: 'HKCU\\Software\\Foo'.
+
+    Children are deleted depth-first (always enumerating index 0, because
+    each deletion shifts the remaining children up), then the key itself.
+    Returns True on success, False on any failure (permissions, missing
+    key, malformed path)."""
     try:
         hive_name, sub = path.split("\\", 1)
         hive = (winreg.HKEY_CURRENT_USER if hive_name.upper() == "HKCU"
@@ -102,12 +117,12 @@ def delete_registry_path(path):
 
 
 # --------------------------------------------------------------------------
-# Lanzamiento seguro de desinstaladores
+# Safe uninstaller launching
 # --------------------------------------------------------------------------
 
 def _resolve_exe(token):
-    """Resuelve un ejecutable por nombre contra System32 y el PATH.
-    Devuelve la ruta completa o None."""
+    """Resolve a bare executable name against System32, the Windows dir and
+    PATH. Returns the full path, or None when it cannot be found."""
     for base in (os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
                               "System32"),
                  os.path.join(os.environ.get("SystemRoot", r"C:\Windows"))):
@@ -122,38 +137,40 @@ def _resolve_exe(token):
 
 
 def split_command(cmd):
-    """Divide una linea de comandos en [exe, *args] sin usar shell.
+    """Split a command line into [exe, *args] without using a shell.
 
-    Devuelve (argv, None) o (None, motivo). El ejecutable debe existir en
-    disco (resuelto contra System32/PATH si va sin ruta); si no, no se
-    ejecuta nada. Evita la inyeccion de comandos por UninstallString."""
+    Returns (argv, None) on success or (None, reason) on failure. The
+    executable must exist on disk (resolved against System32/PATH when the
+    token carries no path); otherwise nothing gets executed. This blocks
+    command injection through a tampered UninstallString."""
     cmd = os.path.expandvars((cmd or "").strip())
     if not cmd:
-        return None, "el comando de desinstalacion esta vacio"
+        return None, "the uninstall command is empty"
     try:
         tokens = [t.strip('"') for t in shlex.split(cmd, posix=False)]
     except ValueError as e:
-        return None, f"no se pudo interpretar el comando ({e})"
+        return None, f"could not parse the command ({e})"
     tokens = [t for t in tokens if t]
     if not tokens:
-        return None, "el comando de desinstalacion esta vacio"
+        return None, "the uninstall command is empty"
     exe = tokens[0]
     if os.path.sep in exe:
         if not os.path.isfile(exe):
-            return None, f"el ejecutable no existe: {exe}"
+            return None, f"the executable does not exist: {exe}"
     else:
         resolved = _resolve_exe(exe)
         if not resolved:
-            return None, f"no se encontro el ejecutable: {exe}"
+            return None, f"the executable was not found: {exe}"
         exe = resolved
     return [exe] + tokens[1:], None
 
 
 def launch_uninstaller(command):
-    """Lanza un UninstallString del registro de forma segura.
+    """Safely launch a registry UninstallString.
 
-    Nunca usa shell=True: el ejecutable se extrae, se verifica y se lanza
-    con una lista de argumentos. Devuelve (ok, msg)."""
+    Never uses shell=True: the executable is extracted, verified to exist
+    and launched with an argument list (see split_command). Returns
+    (ok, msg) where msg is a stable English status/detail string."""
     argv, err = split_command(command)
     if argv is None:
         return False, err
@@ -166,19 +183,21 @@ def launch_uninstaller(command):
 
 
 # --------------------------------------------------------------------------
-# Busqueda de restos
+# Leftover search
 # --------------------------------------------------------------------------
 
 def _norm(text):
+    """Lowercase alphanumeric-only normalization for fuzzy comparisons."""
     return "".join(ch for ch in text.lower() if ch.isalnum())
 
 
 def matches_leftover(name, text):
-    """True si `text` (nombre de carpeta o clave) parece un resto de `name`.
+    """True if `text` (a folder or key name) looks like a leftover of `name`.
 
-    Exige match exacto normalizado, o que TODOS los tokens significativos
-    (palabras de 3+ caracteres) del nombre aparezcan. Mucho mas estricto
-    que una busqueda por subcadenas sueltas."""
+    Requires either an exact normalized match, or that ALL significant
+    tokens (words of 3+ characters) of the application name appear. Much
+    stricter than a loose substring search, which would match far too many
+    unrelated keys."""
     tokens = [t for t in re.split(r"[^a-z0-9]+", name.lower())
               if len(t) >= 3]
     low = text.lower()
@@ -190,13 +209,19 @@ def matches_leftover(name, text):
 
 
 def find_leftovers(name, location=""):
-    """Busca restos de un programa en disco y registro. Devuelve [(tipo, ruta)]."""
+    """Search disk and registry for leftovers of a program.
+
+    Returns a list of (kind, path) tuples where kind is the stable English
+    tag "folder" or "registry" (translated for display by the UI). Scans
+    the install location, %APPDATA%, %LOCALAPPDATA%, %PROGRAMDATA% and the
+    Software keys of HKCU/HKLM (including WOW6432Node), skipping the
+    protected generic key names."""
     leftovers = []
     if not name:
         return leftovers
 
     if location and os.path.exists(location):
-        leftovers.append(("carpeta", location))
+        leftovers.append(("folder", location))
     for base in (os.path.expandvars(r"%APPDATA%"), os.path.expandvars(r"%LOCALAPPDATA%"),
                  os.path.expandvars(r"%PROGRAMDATA%")):
         if not os.path.isdir(base):
@@ -205,7 +230,7 @@ def find_leftovers(name, location=""):
             for entry in os.listdir(base):
                 p = os.path.join(base, entry)
                 if os.path.isdir(p) and matches_leftover(name, entry):
-                    leftovers.append(("carpeta", p))
+                    leftovers.append(("folder", p))
         except OSError:
             pass
     bases = [
@@ -226,6 +251,6 @@ def find_leftovers(name, location=""):
             if _norm(sub) in _PROTECTED_KEY_NAMES:
                 continue
             if matches_leftover(name, sub):
-                leftovers.append(("registro", f"{_hive_name(hive)}\\{base}\\{sub}"))
+                leftovers.append(("registry", f"{_hive_name(hive)}\\{base}\\{sub}"))
         winreg.CloseKey(key)
     return leftovers

@@ -12,7 +12,7 @@ LimpiaPro is a free, open-source cleaner for Windows, inspired by CCleaner — w
 
 ## How to use it (no coding needed)
 
-You don't need any technical knowledge. The buttons are in Spanish, but every action is just buttons, lists and confirmations — **nothing is ever deleted until you review and confirm it**.
+You don't need any technical knowledge. The app automatically displays in **Spanish or English, following your Windows display language**, and every action is just buttons, lists and confirmations — **nothing is ever deleted until you review and confirm it**.
 
 ### 1. Start the app
 
@@ -24,31 +24,31 @@ You don't need any technical knowledge. The buttons are in Spanish, but every ac
 
 1. Wait a few seconds while the app analyzes your PC; the sizes update as it goes.
 2. Each row is a category (temp files, browser caches, recycle bin, ...) with a checkbox. Uncheck anything you don't want to touch.
-3. Click **Vista previa** to see the exact list of files that would be deleted (first 1,000 entries).
-4. Click **Limpiar seleccionado**, review the summary and confirm. The app shows how much space was freed.
+3. Click **Vista previa** / *Preview* to see the exact list of files that would be deleted (first 1,000 entries).
+4. Click **Limpiar seleccionado** / *Clean selected*, review the summary and confirm. The app shows how much space was freed.
 
 ### 3. Speed up startup — "Inicio" tab
 
 Three sub-tabs:
 
-- **Apps de inicio** — programs that launch with Windows. Select one and click *Desactivar seleccionada* to stop it. You can undo this later from *Reactivar desactivadas...*.
+- **Apps de inicio** — programs that launch with Windows. Select one and click *Desactivar seleccionada* / *Disable selected* to stop it. You can undo this later from *Reactivar desactivadas...* / *Re-enable disabled...*.
 - **Tareas programadas** — Windows scheduled tasks, with activate/deactivate buttons.
-- **Procesos activos** — running processes. Select one and *Terminar proceso* closes it. Be careful: force-closing a program can lose unsaved work.
+- **Procesos activos** — running processes. Select one and *Terminar proceso* / *End process* closes it. Be careful: force-closing a program can lose unsaved work.
 
 ### 4. Find duplicate files — "Duplicados" tab
 
 1. Click the folder box to choose where to search (for example, your Documents folder).
-2. Click **Buscar duplicados** and wait for the scan.
-3. Results come in groups: an "original" file and its duplicates. Check the copies you want to remove and click *Eliminar seleccionados*. Keep at least one copy per group.
+2. Click **Buscar duplicados** / *Find duplicates* and wait for the scan.
+3. Results come in groups: an "original" file and its duplicates. Check the copies you want to remove and click *Eliminar seleccionados* / *Delete selected*. Keep at least one copy per group.
 
 ### 5. Windows Update cleanup — "Windows Update" tab
 
-Removes old update leftovers that Windows keeps "just in case". Click **Analizar** to measure, then **Limpiar** to clean. It can take several minutes and requires administrator.
+Removes old update leftovers that Windows keeps "just in case". Click **Analizar** / *Analyze* to measure, then **Limpiar** / *Clean* to clean. It can take several minutes and requires administrator.
 
 ### 6. Uninstall apps — "Desinstalar" tab
 
-- Lists the programs installed on your PC. Select one and click *Desinstalar* to run its normal uninstaller.
-- After uninstalling, *Buscar restos* finds leftover files and registry entries the uninstaller missed, and can delete them.
+- Lists the programs installed on your PC. Select one and click *Desinstalar* / *Uninstall* to run its normal uninstaller.
+- After uninstalling, *Buscar restos* / *Find leftovers* finds leftover files and registry entries the uninstaller missed, and can delete them.
 
 ### 7. See what the app did — "Registro" tab
 

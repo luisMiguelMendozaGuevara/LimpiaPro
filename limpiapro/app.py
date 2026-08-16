@@ -1,4 +1,16 @@
-"""Aplicacion principal de LimpiaPro."""
+"""LimpiaPro main application.
+
+CleanerApp builds the sidebar + lazily constructed pages, owns the global
+busy state and drives the two big workflows:
+
+  - analyze_all(): one scan pass, one thread per category, progress
+    marshalled to the UI through post_ui; results cached to
+    limpiador_cache.json for an instant next start.
+  - confirm_clean()/_clean_worker(): parallel deletion per category with a
+    cumulative progress bar, followed by a full re-analysis.
+
+Entry point: main() re-elevates through ShellExecuteW when not admin
+(the app keeps running without admin if the UAC prompt is declined)."""
 
 import ctypes
 import json
@@ -13,6 +25,7 @@ from tkinter import filedialog, messagebox
 
 from . import APP_NAME, APP_VERSION
 from .categories import build_categories
+from .i18n import t
 from .recycle import empty_recycle_bin, recycle_bin_size
 from .utils import _errlog, app_dir, format_size, is_admin
 from .winapp2 import default_winapp_file, parse_winapp_rules
@@ -28,21 +41,23 @@ from .ui.widgets import post_ui, readonly_toplevel, run_async, start_ui_poller
 
 
 class CleanerApp(ctk.CTk):
+    """Application window: sidebar navigation, pages and global state."""
+
     CACHE_FILE = os.path.join(app_dir(), "limpiador_cache.json")
 
     def __init__(self):
         super().__init__()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.title(f"{APP_NAME} {APP_VERSION} - Limpiador de sistema")
-        _errlog("init: window creada")
+        self.title(f"{APP_NAME} {APP_VERSION} - {t('app.window_subtitle')}")
+        _errlog("init: window created")
         self.geometry("1000x680")
         self.minsize(860, 560)
         self.configure(fg_color=("#e8e8e8", "#17181c"))
 
         ctk.set_appearance_mode("dark")
         self.accent = get_system_accent()
-        # Fondo Mica (Windows 11 22H2+). Solo se vuelve transparente la
-        # ventana cuando el sistema soporta el material translucido.
+        # Mica backdrop (Windows 11 22H2+). The window only becomes
+        # translucent when the system supports the material.
         self.mica = apply_mica_backdrop(self)
         if not self.mica:
             self.configure(fg_color=("#e8e8e8", "#17181c"))
@@ -51,7 +66,7 @@ class CleanerApp(ctk.CTk):
         self.scanner = None
         self.busy = False
 
-        # Debounce de redimension: no forzar un repintado por cada evento <Configure>
+        # Resize debounce: avoid one repaint per <Configure> event.
         self._resize_job = None
         self.bind("<Configure>", self._on_configure)
 
@@ -60,12 +75,13 @@ class CleanerApp(ctk.CTk):
         self._restyle_tree()
         self.show_page("clean")
 
-        self.log(f"{APP_NAME} {APP_VERSION} iniciado. " +
-                 ("(administrador)" if is_admin() else "(sin admin)"))
+        self.log(t("log.started_admin" if is_admin() else "log.started_no_admin",
+                   app=APP_NAME, ver=APP_VERSION))
         start_ui_poller(self)
         self.after(300, self.analyze_all)
 
     def report_callback_exception(self, exc, val, tb):
+        """Route Tk callback exceptions to the error log."""
         _errlog("CALLBACK EXCEPTION: " + "".join(traceback.format_exception(exc, val, tb)))
         try:
             super().report_callback_exception(exc, val, tb)
@@ -73,10 +89,12 @@ class CleanerApp(ctk.CTk):
             pass
 
     def _on_close(self):
-        _errlog("cerrando por usuario o WM_CLOSE")
+        """WM_DELETE_WINDOW handler: destroy the window."""
+        _errlog("closing by user or WM_CLOSE")
         self.destroy()
 
     def _on_configure(self, event):
+        """Debounce window resize events (only the root's own events)."""
         if event.widget is not self:
             return
         if self._resize_job is not None:
@@ -84,12 +102,14 @@ class CleanerApp(ctk.CTk):
         self._resize_job = self.after(200, self._resize_debounced)
 
     def _resize_debounced(self):
+        """Process pending layout once, 200 ms after the last resize."""
         self._resize_job = None
         self.update_idletasks()
 
     # ------------------------------------------------------------------ layout
 
     def _build_sidebar(self):
+        """Build the navigation sidebar: logo, nav buttons, theme switch."""
         self.sidebar = ctk.CTkFrame(self, width=200, corner_radius=0, fg_color=("#d9d9d9", "#222327"))
         self.sidebar.pack(side="left", fill="y", padx=0, pady=0)
         self.sidebar.pack_propagate(False)
@@ -101,12 +121,12 @@ class CleanerApp(ctk.CTk):
 
         self.nav_buttons = {}
         nav_items = [
-            ("clean", "\U0001F9F9  Limpieza"),
-            ("startup", "\U0001F4C8  Inicio"),
-            ("dupes", "\U0001F50D  Duplicados"),
-            ("update", "\U0001F504  Windows Update"),
-            ("uninstall", "\U0001F5D1  Desinstalar"),
-            ("log", "\U0001F4DD  Registro"),
+            ("clean", t("nav.clean")),
+            ("startup", t("nav.startup")),
+            ("dupes", t("nav.dupes")),
+            ("update", t("nav.update")),
+            ("uninstall", t("nav.uninstall")),
+            ("log", t("nav.log")),
         ]
         for key, text in nav_items:
             btn = ctk.CTkButton(self.sidebar, text=text, anchor="w", height=38,
@@ -119,7 +139,7 @@ class CleanerApp(ctk.CTk):
         self.content = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
         self.content.pack(side="left", fill="both", expand=True)
 
-        # pie de barra lateral: modo claro/oscuro
+        # Sidebar footer: light/dark toggle.
         footer = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         footer.pack(side="bottom", fill="x", padx=14, pady=14)
         self.theme_mode = ctk.StringVar(value=ctk.get_appearance_mode().lower())
@@ -135,13 +155,13 @@ class CleanerApp(ctk.CTk):
 
         self.theme_switch = None
 
-        sw = ctk.CTkSwitch(footer, text="Modo oscuro", variable=self.theme_mode,
+        sw = ctk.CTkSwitch(footer, text=t("theme.dark"), variable=self.theme_mode,
                            onvalue="dark", offvalue="light", command=_toggle)
         sw.pack(anchor="w")
         self.theme_switch = sw
 
     def _fade_to(self, target_alpha, ready=None):
-        """Anima la opacidad de la ventana. Al terminar llama a ready()."""
+        """Animate the window opacity; call ready() when finished."""
         steps = 10
         step_ms = 20
         start = float(self.attributes("-alpha"))
@@ -160,19 +180,23 @@ class CleanerApp(ctk.CTk):
         step(0)
 
     def _apply_theme(self):
+        """Switch the appearance mode and restyle the ttk trees."""
         m = self.theme_mode.get()
         ctk.set_appearance_mode(m)
         self._restyle_tree()
         self.after(60, self._finish_theme)
 
     def _finish_theme(self):
+        """Restore the switch label and fade back in."""
         m = self.theme_mode.get()
-        self.theme_switch.configure(text="Modo oscuro" if m == "dark" else "Modo claro",
-                                    state="normal")
+        self.theme_switch.configure(
+            text=t("theme.dark") if m == "dark" else t("theme.light"),
+            state="normal")
         self._fade_to(1.0)
         self._theme_animating = False
 
     def _highlight_nav(self, active_key):
+        """Accentuate the active nav button and reset the others."""
         accent = getattr(self, "accent", ACCENT_FALLBACK)
         for key, btn in self.nav_buttons.items():
             if key == active_key:
@@ -185,8 +209,8 @@ class CleanerApp(ctk.CTk):
                     btn.configure(text_color="black")
 
     def _restyle_tree(self):
-        """Aplica colores del tema a los arboles (ttk no sigue
-        automaticamente el modo claro/oscuro)."""
+        """Apply theme colors to the trees (ttk does not follow the
+        customtkinter light/dark mode by itself)."""
         style = tk.ttk.Style()
         dark = ctk.get_appearance_mode().lower() == "dark"
         bg = "#1c1c1e" if dark else "#f5f5f5"
@@ -203,6 +227,8 @@ class CleanerApp(ctk.CTk):
             pass
 
     def _get_page(self, key):
+        """Return the page for `key`, constructing it lazily on first use
+        and caching it (page state survives navigation)."""
         if key not in self._pages:
             if key == "clean":
                 self._pages["clean"] = CleanPage(self.content, self)
@@ -220,6 +246,7 @@ class CleanerApp(ctk.CTk):
         return self._pages[key]
 
     def show_page(self, key):
+        """Swap the visible page and highlight its nav button."""
         page = self._get_page(key)
         if getattr(self, "_current_page", None) is not None and self._current_page is not page:
             self._current_page.pack_forget()
@@ -229,25 +256,32 @@ class CleanerApp(ctk.CTk):
 
     @property
     def pages_clean(self):
+        """The cleanup page (constructing it if needed)."""
         return self._get_page("clean")
 
     @property
     def pages_dupes(self):
+        """The duplicates page (constructing it if needed)."""
         return self._get_page("dupes")
 
     @property
     def log_page(self):
+        """The log page (constructing it if needed)."""
         return self._get_page("log")
 
-    # ------------------------------------------------------------------ log / estado
+    # ------------------------------------------------------------------ log / state
 
     def log(self, msg):
+        """Append a message to the activity log page."""
         self.log_page.log(msg)
 
     def set_status(self, text):
+        """Update the global status label (lives on the cleanup page)."""
         self.pages_clean.status_lbl.configure(text=text)
 
     def set_busy(self, value, mode="determinate"):
+        """Set the global busy flag, drive the progress bar and notify
+        every built page (on_busy) so they disable their action buttons."""
         self.busy = value
         self._notify_busy(value)
         self.pages_clean.progress.stop()
@@ -260,17 +294,19 @@ class CleanerApp(ctk.CTk):
             self.pages_clean.progress.set(1)
 
     def _notify_busy(self, value):
+        """Forward busy state changes to each page's on_busy hook."""
         for page in self._pages.values():
             handler = getattr(page, "on_busy", None)
             if handler:
                 try:
                     handler(value)
                 except Exception as e:
-                    _errlog(f"on_busy fallo ({type(page).__name__}): {e!r}")
+                    _errlog(f"on_busy failed ({type(page).__name__}): {e!r}")
 
-    # ------------------------------------------------------------------ analizar
+    # ------------------------------------------------------------------ analyze
 
     def _load_cache(self):
+        """Load the last scan results cache ({} when missing/corrupt)."""
         try:
             with open(self.CACHE_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
@@ -278,6 +314,7 @@ class CleanerApp(ctk.CTk):
             return {}
 
     def _save_cache(self):
+        """Persist per-category size/files to disk (atomic tmp+replace)."""
         data = {c.key: {"size": c.size, "files": c.files} for c in self.categories}
         try:
             tmp = self.CACHE_FILE + ".tmp"
@@ -288,62 +325,69 @@ class CleanerApp(ctk.CTk):
             pass
 
     def analyze_all(self):
+        """Kick off a full system analysis on a background coordinator
+        thread (cached results are shown immediately first)."""
         if self.busy:
             return
-        # Mostrar resultados en cache inmediatamente (inicio instantaneo)
+        # Show cached results immediately (instant startup).
         self._apply_cache()
         self.set_busy(True)
-        self.set_status("Analizando sistema...")
+        self.set_status(t("status.analyzing"))
         threading.Thread(target=self._analyze_worker, daemon=True).start()
 
     def load_winapp_rules(self):
+        """Ask for a winapp2.ini file and load it on a worker thread."""
         path = filedialog.askopenfilename(
-            title="Seleccionar archivo de reglas winapp2",
-            filetypes=[("winapp2.ini", "*.ini"), ("Todos los archivos", "*.*")])
+            title=t("dialog.winapp_title"),
+            filetypes=[("winapp2.ini", "*.ini"),
+                       (t("dialog.all_files"), "*.*")])
         if not path:
             return
         self.set_busy(True, mode="indeterminate")
-        self.set_status("Parseando reglas winapp2...")
+        self.set_status(t("status.parsing_winapp"))
         run_async(self, self._load_winapp_worker, self._load_winapp_done,
                   (path,), on_error=self._load_winapp_error)
 
     def _load_winapp_worker(self, path):
+        """Parse + detect the winapp2.ini off the UI thread.
+        Returns (path, rules)."""
         rules = parse_winapp_rules(path)
         return path, rules
 
     def _load_winapp_apply(self, path, rules):
+        """Replace the winapp category rules and refresh the UI."""
         found = False
         for c in self.categories:
             if c.key == "winapp":
                 c.rules = [r2 for s in rules for r2 in s.rules]
-                c.description = ("Base de datos comunitaria winapp2.ini: "
-                                 + (f"{len(rules)} apps detectadas"
-                                    if rules else "sin reglas detectadas"))
+                c.description = (t("cat.winapp.desc_detected", n=len(rules))
+                                 if rules else t("cat.winapp.desc_none"))
                 found = True
                 break
         if found:
             self.pages_clean._build_rows()
         if rules:
-            self.log(f"Reglas winapp2 cargadas: {len(rules)} aplicaciones de {path}")
-            self.set_status(f"{len(rules)} aplicaciones con reglas cargadas")
+            self.log(t("log.winapp_loaded", n=len(rules), path=path))
+            self.set_status(t("status.winapp_loaded", n=len(rules)))
         else:
-            self.log("No se detectaron reglas validas en el archivo seleccionado.")
-            messagebox.showinfo(APP_NAME,
-                                "No se detectaron reglas validas (o ningun programa "
-                                "coincide con las condiciones Detect=).")
+            self.log(t("log.winapp_none"))
+            messagebox.showinfo(APP_NAME, t("msg.winapp_none"))
         self.set_busy(False)
         self.after(100, self.analyze_all)
 
     def _load_winapp_done(self, path, rules):
+        """UI callback for a successful winapp2 load."""
         self._load_winapp_apply(path, rules)
 
     def _load_winapp_error(self, exc):
+        """UI callback for a failed winapp2 load."""
         self.set_busy(False)
-        self.set_status("Error al cargar reglas winapp2")
-        messagebox.showerror(APP_NAME,
-                             f"Error al parsear las reglas winapp2:\n{exc}")
+        self.set_status(t("status.winapp_error"))
+        messagebox.showerror(APP_NAME, t("msg.winapp_error", exc=exc))
 
     def _apply_cache(self):
+        """Copy the cached size/files into the category objects (displayed
+        until the fresh scan overwrites them)."""
         cached = self._load_cache()
         for cat in self.categories:
             entry = cached.get(cat.key)
@@ -352,9 +396,13 @@ class CleanerApp(ctk.CTk):
                 cat.files = entry.get("files", 0)
 
     def _analyze_worker(self):
-        # Un solo pase de escaneo, categorias en paralelo (hilos).
-        # El progreso se calcula con los archivos escaneados / objetivo estimado
-        # (cache anterior si existe; si no, indeterminada).
+        """Scan coordinator: one thread per category, then save the cache.
+
+        Progress is estimated as scanned files / target total (the previous
+        run's counts, or 1 per category when no cache exists). Each
+        per-category callback and completion is marshalled to the UI
+        through post_ui; the coordinator joins all threads before
+        finishing."""
         targets = {c.key: max(c.files, 1) for c in self.categories}
         total_target = sum(targets.values())
         progress = {"done": 0}
@@ -362,6 +410,7 @@ class CleanerApp(ctk.CTk):
 
         def cb(cat, n):
             with lock:
+                # Replace this category's contribution to the running total.
                 progress["done"] = (progress["done"] - progress.get(cat.key, 0)
                                     + n)
                 progress[cat.key] = n
@@ -377,108 +426,124 @@ class CleanerApp(ctk.CTk):
                 else:
                     c.scan(on_progress=lambda n, cc=c: cb(cc, n))
                 post_ui(lambda cc=c: self._analyze_one_done(cc))
-            t = threading.Thread(target=work, daemon=True)
-            t.start()
-            threads.append(t)
-        for t in threads:
-            t.join()
+            thread = threading.Thread(target=work, daemon=True)
+            thread.start()
+            threads.append(thread)
+        for thread in threads:
+            thread.join()
 
         self._save_cache()
         post_ui(self._analyze_all_done)
 
     def _analyze_progress(self, cat, frac):
+        """Update the determinate progress bar during the scan."""
         if self.busy:
             self.pages_clean.progress.configure(mode="determinate")
             self.pages_clean.progress.set(min(frac, 1.0))
-            self.set_status(f"Analizando: {cat.label} ...")
+            self.set_status(f"{t('status.analyzing')} {cat.label} ...")
 
     def _analyze_one_done(self, cat):
+        """Refresh one category's row as soon as its scan finishes."""
         self.pages_clean.update_after_scan(cat)
 
     def _analyze_all_done(self):
+        """Finish the analysis: clear busy and update the selected total."""
         self.set_busy(False)
-        self.set_status("Analisis completado")
+        self.set_status(t("status.analysis_done"))
         self.update_total()
-        _errlog("analisis completado")
+        _errlog("analysis complete")
 
     # ------------------------------------------------------------------ total
 
     def update_total(self):
+        """Sum the sizes of the checked categories onto the total label."""
         total = sum(c.size for c in self.categories if self.pages_clean.vars[c.key].get())
-        self.pages_clean.total_lbl.configure(
-            text=f"Total seleccionado: {format_size(total)}")
+        self.pages_clean.total_lbl.configure(text=t("clean.total",
+                                                    size=format_size(total)))
 
-    # ------------------------------------------------------------------ limpiar
+    # ------------------------------------------------------------------ clean
 
     def confirm_clean(self):
+        """Build the confirmation dialog and launch _clean_worker."""
         selected = [c for c in self.categories if self.pages_clean.vars[c.key].get()]
         if not selected:
-            messagebox.showinfo(APP_NAME, "No hay ninguna categoria seleccionada.")
+            messagebox.showinfo(APP_NAME, t("msg.no_categories"))
             return
         total = sum(c.size for c in selected)
         names = "\n".join(f"  \u2022 {c.label}" for c in selected)
-        detail = "Se eliminaran definitivamente los archivos temporales, la cache y el historial.\n"
+        detail = t("msg.clean_detail_base")
         if any(c.recycle_bin for c in selected):
-            detail += "\nATENCION: se vaciara la PAPELERA DE RECICLAJE.\n"
+            detail += t("msg.clean_detail_recycle")
         if any(c.needs_admin for c in selected) and not is_admin():
-            detail += "\nAVISO: se requiere ejecutar como administrador para limpiar archivos del sistema.\n"
-        msg = f"Se limpiaran:\n{names}\n\nTamano estimado: {format_size(total)}\n\n{detail}\nContinuar?"
+            detail += t("msg.clean_detail_admin")
+        msg = t("msg.clean_confirm", names=names, size=format_size(total),
+                detail=detail)
         if not messagebox.askyesno(APP_NAME, msg, icon="warning"):
             return
         self.set_busy(True, mode="determinate")
         self.pages_clean.progress.set(0)
-        self.set_status("Limpiando...")
-        threading.Thread(target=self._clean_worker, args=(selected,), daemon=True).start()
+        self.set_status(t("status.cleaning"))
+        threading.Thread(target=self._clean_worker, args=(selected,),
+                         daemon=True).start()
 
     def _clean_worker(self, selected):
+        """Delete the selected categories sequentially; each category
+        deletes its targets in parallel internally. The progress bar is
+        cumulative across categories (each one's fraction is scaled by its
+        share of the pre-clean total)."""
         total_freed = 0
         target_all = sum(c.size for c in selected)
         cumulative = 0
         for cat in selected:
-            self.log(f"Limpiando: {cat.label} ...")
+            self.log(t("log.cleaning_cat", label=cat.label))
             if cat.recycle_bin:
-                # Medir ANTES de vaciar: despues ya no queda nada que contar.
+                # Measure BEFORE emptying: afterwards there is nothing left
+                # to count. The ok-message comes back in English; the UI
+                # translates the success line for display.
                 bin_size = recycle_bin_size()
                 ok, msg = empty_recycle_bin()
                 if ok:
                     total_freed += bin_size
                 cumulative += cat.size
-                self.log(f"  Papelera: {msg}")
+                self.log(t("log.recycle_line",
+                           msg=t("msg.recycle_emptied") if ok else msg))
                 continue
             removed, errors, freed = cat.clean(
-                on_progress=lambda frac, cum=cumulative, t=target_all:
-                post_ui(lambda: self._clean_progress(cum, t, frac)))
+                on_progress=lambda frac, cum=cumulative, tot=target_all:
+                post_ui(lambda: self._clean_progress(cum, tot, frac)))
             cumulative += cat.size
             total_freed += freed
-            self.log(f"  Eliminados {removed} elementos, {errors} errores "
-                     f"({format_size(freed)} liberados).")
+            self.log(t("log.cat_cleaned", n=removed, e=errors,
+                       size=format_size(freed)))
         post_ui(lambda: self._clean_done(total_freed))
 
     def _clean_progress(self, cum_base, target_all, frac_cat):
+        """Map one category's 0..1 progress onto the global bar."""
         if target_all > 0 and self.busy:
             value = cum_base / target_all + frac_cat * (target_all - cum_base) / target_all
             self.pages_clean.progress.set(min(value, 1.0))
 
     def _clean_done(self, total_freed):
+        """Finish the cleanup and trigger a fresh full analysis."""
         self.set_busy(False)
         self.pages_clean.progress.set(1)
-        self.set_status(f"Limpieza completada - {format_size(total_freed)} liberados")
-        self.log(f"Total liberado: {format_size(total_freed)}")
+        self.set_status(t("status.clean_done", size=format_size(total_freed)))
+        self.log(t("log.total_freed", size=format_size(total_freed)))
         self.after(300, self.analyze_all)
 
-    # ------------------------------------------------------------------ vista previa
+    # ------------------------------------------------------------------ preview
 
     def preview_clean(self):
+        """Open the preview window; content is collected on a worker."""
         selected = [c for c in self.categories if self.pages_clean.vars[c.key].get()]
         if not selected:
-            messagebox.showinfo(APP_NAME, "No hay categorias seleccionadas.")
+            messagebox.showinfo(APP_NAME, t("msg.no_categories"))
             return
         if sum(c.files for c in selected) == 0 and not any(c.recycle_bin for c in selected):
-            messagebox.showinfo(APP_NAME, "No hay archivos que mostrar (todo parece limpio).")
+            messagebox.showinfo(APP_NAME, t("msg.preview_empty"))
             return
         win, box = readonly_toplevel(
-            self, "Vista previa de limpieza", "760x520",
-            "Archivos que se eliminaran (primeras 1000 entradas)")
+            self, t("title.preview"), "760x520", t("preview.header"))
         self._preview_box = box
         self.set_busy(True, mode="indeterminate")
         run_async(self, self._preview_worker, self._preview_done,
@@ -486,19 +551,23 @@ class CleanerApp(ctk.CTk):
                   on_error=lambda e: self._preview_error(box, e))
 
     def _preview_worker(self, selected):
+        """Collect up to 1000 target paths per selected category.
+        Returns a list of text chunks for the preview box."""
         out = []
         for cat in selected:
             if cat.recycle_bin:
-                out.append(f"== {cat.label}: se vaciara la papelera ==\n\n")
+                out.append(t("preview.recycle_section", label=cat.label) + "\n\n")
                 continue
             files, scanned = cat.list_files(1000)
-            out.append(f"== {cat.label} ({len(files)} mostradas de {scanned:,} detectadas) ==\n")
+            out.append(t("preview.section", label=cat.label,
+                         shown=len(files), total=scanned) + "\n")
             for f in files:
                 out.append(f"  {f}\n")
             out.append("\n")
         return out,
 
     def _preview_done(self, out):
+        """Fill the preview box with the collected chunks."""
         self.set_busy(False)
         box = self._preview_box
         box.configure(state="normal")
@@ -507,39 +576,44 @@ class CleanerApp(ctk.CTk):
         box.configure(state="disabled")
 
     def _preview_error(self, box, exc):
+        """Show the collection error inside the preview box."""
         self.set_busy(False)
         box.configure(state="normal")
         box.delete("1.0", "end")
-        box.insert("1.0", f"Error al recopilar la vista previa:\n{exc}\n")
+        box.insert("1.0", t("msg.preview_error", exc=exc) + "\n")
         box.configure(state="disabled")
 
 
 def _excepthook(exc_type, exc, tb):
-    _errlog("excepcion no capturada: "
+    """sys.excepthook installed by limpiador.py: log uncaught exceptions
+    (the packaged app has no console)."""
+    _errlog("uncaught exception: "
             + "".join(traceback.format_exception(exc_type, exc, tb)))
 
 
 def main():
-    _errlog("--- arranque ---")
+    """Entry point: re-elevate to administrator when possible, then run
+    the application (continuing without admin if UAC is declined)."""
+    _errlog("--- startup ---")
     if not is_admin():
         try:
             if getattr(sys, "frozen", False):
                 exe, args = sys.executable, ""
             else:
                 exe, args = sys.executable, f'"{os.path.abspath(sys.argv[0])}"'
-            _errlog(f"no admin; elevando: {exe} {args}")
+            _errlog(f"no admin; elevating: {exe} {args}")
             result = ctypes.windll.shell32.ShellExecuteW(
                 None, "runas", exe, args, None, 1)
-            _errlog(f"runas devolvio {result}")
+            _errlog(f"runas returned {result}")
             if result > 32:
                 return
         except Exception as e:
-            _errlog(f"error al elevar: {e}")
+            _errlog(f"elevation error: {e}")
     try:
         ctk.set_appearance_mode("dark")
         app = CleanerApp()
-        _errlog("app creada")
+        _errlog("app created")
         app.mainloop()
-        _errlog("mainloop terminado")
+        _errlog("mainloop finished")
     except Exception:
         _errlog("EXCEPTION: " + traceback.format_exc())

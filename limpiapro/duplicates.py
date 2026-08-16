@@ -1,4 +1,4 @@
-"""Buscador de archivos duplicados."""
+"""Duplicate file finder."""
 
 import hashlib
 import os
@@ -9,10 +9,11 @@ from .utils import iter_file_sizes
 
 
 class DuplicateScanner:
-    """Buscador de duplicados al estilo czkawka: 1) agrupar por tamano,
-    2) prehash de los primeros 4KB para descartar candidatos barato,
-    3) hash completo solo del resto. Hashing en paralelo con blake2b
-    (mas rapido que md5 en CPython)."""
+    """czkawka-style duplicate finder: 1) group by size, 2) prehash the
+    first 4KB to discard candidates cheaply, 3) full hash only the rest.
+    Hashing runs in parallel with blake2b (faster than md5 in CPython;
+    hashlib releases the GIL during update so threads overlap I/O)."""
+
     PREHASH_SIZE = 4096
 
     def __init__(self, folder, min_size_mb=2, workers=6):
@@ -24,6 +25,8 @@ class DuplicateScanner:
 
     @staticmethod
     def _hasher(path, full=False):
+        """blake2b digest of one file: first PREHASH_SIZE bytes only, or
+        the whole file in BLOCK_SIZE chunks when full=True."""
         h = hashlib.blake2b(digest_size=16)
         with open(path, "rb") as f:
             if not full:
@@ -38,6 +41,8 @@ class DuplicateScanner:
 
     @staticmethod
     def _prehash(path):
+        """Partial hash (first 4KB); None on OSError (file unreadable or
+        gone mid-scan; such files silently drop out of the results)."""
         try:
             return DuplicateScanner._hasher(path, full=False)
         except OSError:
@@ -45,14 +50,15 @@ class DuplicateScanner:
 
     @staticmethod
     def _full_hash(path):
+        """Whole-file hash; None on OSError."""
         try:
             return DuplicateScanner._hasher(path, full=True)
         except OSError:
             return None
 
     def _hash_paths(self, paths, hasher, pool):
-        """Hasea paths en paralelo usando `pool` (que el scan crea una sola
-        vez). Devoluciones {hash: [paths]} o None si se cancela."""
+        """Hash paths in parallel through `pool` (created once per scan).
+        Returns {hash: [paths]} or None when cancelled."""
         results = {}
         fut_to_path = {}
         for p in paths:
@@ -69,6 +75,13 @@ class DuplicateScanner:
         return results
 
     def scan(self):
+        """Run the three phases; fills self.groups with lists of duplicate
+        paths (each list has 2+ identical files).
+
+        Phase 1 uses the scandir walker (iter_file_sizes) so grouping by
+        size costs one stat per file. Phases 2-3 share a single thread
+        pool, avoiding hundreds of pool creations/destructions and the
+        200ms polling the old implementation had."""
         self.groups = []
         by_size = {}
         for path, size in iter_file_sizes(self.folder):
@@ -77,8 +90,7 @@ class DuplicateScanner:
             if size >= self.min_size:
                 by_size.setdefault(size, []).append(path)
 
-        # Un unico pool reutilizado en todas las fases (evita cientos de
-        # pools creados/destruidos y el polling de _future_wait).
+        # One pool reused across all phases and groups.
         with ThreadPoolExecutor(max_workers=self._workers) as pool:
             for size, paths in by_size.items():
                 if self.cancel:

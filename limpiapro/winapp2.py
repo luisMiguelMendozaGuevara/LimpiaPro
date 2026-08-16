@@ -1,17 +1,16 @@
-"""Parser del formato winapp2.ini con deteccion y exclusiones.
+"""Parser for the winapp2.ini format with detection and exclusions.
 
-Subconjunto soportado:
-  [Aplicacion]
-  Detect=HKCU\\Software\\Algo        (condicion singular, por compatibilidad)
-  Detect1=HKLM\\...                  (indexadas: TODAS deben cumplirse)
-  DetectFile1=%LocalAppData%\\Algo*  (detect por archivo, admite comodines)
-  SpecialDetect=DET_XXX              (interno de CCleaner: se descarta)
-  FileKey1=ruta|mascara[;mascara...]|RECURSE|REMOVESELF
-  ExcludeKey1=ruta|mascara[;mascara...]   (protege archivos del borrado)
+Supported subset:
+  [Application]
+  Detect=HKCU\\Software\\Something      (singular condition, for compat)
+  Detect1=HKLM\\...                    (indexed: ALL must be true)
+  DetectFile1=%LocalAppData%\\Something*  (file detect, wildcards allowed)
+  SpecialDetect=DET_XXX                (CCleaner-internal: discarded)
+  FileKey1=path|mask[;mask...]|RECURSE|REMOVESELF
+  ExcludeKey1=path|mask[;mask...]      (protects files from deletion)
 
-La deteccion esta separada del parseo para poder testear el parser sin
-tocar el registro ni el disco.
-"""
+Detection is kept separate from parsing so the parser can be tested
+without touching the registry or the disk."""
 
 import fnmatch
 import os
@@ -33,23 +32,23 @@ _DETECT_RE = re.compile(r"^(detect|detectfile)\d*$", re.IGNORECASE)
 
 
 def _split_masks(masks: str) -> list:
-    """Lista de mascaras separadas por ; o , (vacio = todo)."""
+    """List of masks separated by ; or , (empty = everything)."""
     out = []
     for m in masks.replace(";", ",").split(","):
         m = m.strip()
         if m == "*.*":
-            m = "*"  # semantica DOS: cualquier archivo, con o sin extension
+            m = "*"  # DOS semantics: any file, with or without extension
         if m:
             out.append(m)
     return out or ["*"]
 
 
 class ExcludeKey:
-    """Exclusion de archivos: lo que casa con (raiz, mascaras) no se borra.
+    """File exclusion: whatever matches (root, masks) is not deleted.
 
-    Una raiz que termina en '\\*' excluye de forma recursiva. La variante
-    'FILE|ruta' excluye un archivo exacto; la variante 'REG|...' se ignora
-    porque la app no borra registro desde reglas winapp2."""
+    A root ending in '\\*' excludes recursively. The 'FILE|path' variant
+    excludes one exact file; 'REG|...' is ignored because the app does not
+    delete registry data from winapp2 rules."""
 
     __slots__ = ("root", "patterns", "recursive", "exact")
 
@@ -63,6 +62,8 @@ class ExcludeKey:
 
     @classmethod
     def parse(cls, val: str) -> Optional["ExcludeKey"]:
+        """Parse an ExcludeKey value ('FILE|path', 'root|masks' or
+        'root\\*|masks'); None for REG variants and malformed input."""
         parts = [p.strip() for p in val.split("|")]
         if not parts or not parts[0]:
             return None
@@ -80,7 +81,8 @@ class ExcludeKey:
         return cls(root=root, patterns=_split_masks(masks), recursive=recursive)
 
     def matches(self, path: str) -> bool:
-        """True si `path` (ya normalizado con normcase+abspath) queda protegido."""
+        """True when `path` (already normalized with normcase+abspath) is
+        protected by this exclusion."""
         if self.exact is not None:
             return path == self.exact
         if not self.root:
@@ -97,6 +99,10 @@ class ExcludeKey:
 
 
 class WinAppRule:
+    """One deletion rule (FileKey) with its masks, recursion flag and
+    section exclusions. patterns_lower is a pre-lowered copy so
+    CleanCategory._match_name does not repeat .lower() per file."""
+
     __slots__ = ("root", "recurse", "patterns", "patterns_lower",
                  "remove_self", "excludes")
 
@@ -106,25 +112,26 @@ class WinAppRule:
         self.root = root
         self.recurse = recurse
         self.patterns = tuple(patterns)
-        # Pre-lowercasar: _match_name no repite .lower() por patron y archivo.
         self.patterns_lower = tuple(p.lower() for p in self.patterns)
         self.remove_self = remove_self
         self.excludes = tuple(excludes)
 
     def is_excluded(self, path: str) -> bool:
+        """True when any ExcludeKey protects `path`."""
         if not self.excludes:
             return False
-        # El root ya viene absolutizado (normcase+abspath) por _rule_roots,
-        # asi que aqui basta normcase: evita GetFullPathName por archivo.
+        # Roots are already absolutized (normcase+abspath) by
+        # CleanCategory._rule_roots, so normcase is enough here: it avoids
+        # one GetFullPathName call per file.
         norm = os.path.normcase(path)
         return any(ex.matches(norm) for ex in self.excludes)
 
 
 def _parse_filekey(val: str, excludes) -> Optional[WinAppRule]:
-    """Parsea 'ruta|mascaras|OPCION' (OPCION: RECURSE o REMOVESELF).
+    """Parse 'path|masks|OPTION' (OPTION: RECURSE or REMOVESELF).
 
-    Una ruta terminada en '\\*' tambien marca recursion (el '*' no puede
-    formar parte de un nombre real de carpeta en Windows)."""
+    A path ending in '\\*' also marks recursion ('*' cannot be part of a
+    real folder name on Windows)."""
     parts = [p.strip() for p in val.split("|")]
     root = parts[0] if parts else ""
     if not root:
@@ -134,7 +141,7 @@ def _parse_filekey(val: str, excludes) -> Optional[WinAppRule]:
         root = root[:-2]
     masks = parts[1] if len(parts) > 1 else ""
     option = parts[2] if len(parts) > 2 else ""
-    # tolerar 'ruta|RECURSE' sin mascaras
+    # tolerate 'path|RECURSE' without masks
     if masks.upper() in ("RECURSE", "REMOVESELF") and not option:
         option = masks
         masks = ""
@@ -146,10 +153,10 @@ def _parse_filekey(val: str, excludes) -> Optional[WinAppRule]:
 
 @dataclass
 class WinAppSection:
-    """Una seccion [App] de winapp2.ini ya parseada.
+    """One parsed [App] section of winapp2.ini.
 
-    Sustituye a los dicts-string de parse_sections; las reglas llevan
-    aplicadas las ExcludeKey de su seccion."""
+    Replaces the string-keyed dicts of the old parse_sections; rules
+    carry their section's ExcludeKeys already applied."""
     name: str
     detects: List[str] = field(default_factory=list)
     special: bool = False
@@ -157,11 +164,11 @@ class WinAppSection:
 
 
 def _parse_sections(text: str) -> List[WinAppSection]:
-    """Parseo en dos pasos: acumular filekeys/excludes y despues construir
-    las reglas (necesita las ExcludeKey de toda la seccion)."""
+    """Two-pass parsing: first accumulate filekeys/excludes, then build
+    the rules (a rule needs all the ExcludeKeys of its section)."""
     sections = []
     current = None
-    pending = {}  # seccion id -> {filekeys, excludes}
+    pending = {}  # section id -> {filekeys, excludes}
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith(";") or line.startswith("#"):
@@ -203,8 +210,8 @@ def _parse_sections(text: str) -> List[WinAppSection]:
 
 
 def parse_sections(text: str) -> List[WinAppSection]:
-    """Parsea el texto de un winapp2.ini a secciones (sin comprobar
-    deteccion). Devuelve una lista de WinAppSection."""
+    """Parse the text of a winapp2.ini into sections (detection not
+    checked). Returns a list of WinAppSection."""
     return _parse_sections(text)
 
 
@@ -212,11 +219,11 @@ _DETECT_CACHE = {}
 
 
 def detect_true(condition: str) -> bool:
-    """Comprueba una condicion Detect=/DetectFile= del formato winapp2.
+    """Check a winapp2 Detect=/DetectFile= condition.
 
-    Memoizada: las miles de secciones de winapp2 repiten muchisimo las
-    mismas condiciones (mismo hive + subclave), y el resultado no cambia
-    durante la vida del proceso."""
+    Memoized: the thousands of sections in winapp2 repeat the same
+    conditions (same hive + subkey) very often, and the result does not
+    change during the process lifetime."""
     d = (condition or "").strip()
     if not d:
         return True
@@ -229,6 +236,8 @@ def detect_true(condition: str) -> bool:
 
 
 def _detect_true(d: str) -> bool:
+    """Uncached check of one condition (registry key exists / file
+    path or glob exists)."""
     try:
         low = d.lower()
         if low.startswith("file"):
@@ -249,11 +258,11 @@ def _detect_true(d: str) -> bool:
 
 
 def active_sections(sections) -> List[WinAppSection]:
-    """Filtra las secciones cuya deteccion se cumple.
+    """Filter the sections whose detection passes.
 
-    Varias Detect/Detect1..N se combinan con AND (formato winapp2): la
-    seccion solo aplica si TODAS se cumplen. Las secciones con solo
-    SpecialDetect (interno de CCleaner) se descartan."""
+    Several Detect/Detect1..N conditions combine with AND (winapp2
+    format): the section only applies when ALL of them are true. Sections
+    with only SpecialDetect (CCleaner-internal) are discarded."""
     out = []
     for s in sections:
         if not s.rules:
@@ -266,12 +275,13 @@ def active_sections(sections) -> List[WinAppSection]:
 
 
 def default_winapp_file() -> str:
+    """Path of the bundled winapp2.ini next to the app."""
     return os.path.join(app_dir(), "winapp2.ini")
 
 
 def parse_winapp_rules(path: str) -> List[WinAppSection]:
-    """Parsea un archivo winapp2.ini y devuelve las secciones activas
-    (apps detectadas como instaladas): lista de WinAppSection."""
+    """Parse a winapp2.ini file and return the active sections (apps
+    detected as installed): a list of WinAppSection."""
     try:
         with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
             text = f.read()
