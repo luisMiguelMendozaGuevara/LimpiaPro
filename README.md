@@ -72,6 +72,16 @@ python -m pytest tests/ -v
 | `tests/` | pytest suite |
 | `LimpiaPro.spec` | PyInstaller build spec |
 
+## Support / Donate
+
+LimpiaPro is developed and maintained in my free time, for free. If it has been useful to you and you'd like to support its development, you can make a donation. Any amount helps and is greatly appreciated:
+
+👉 [Donate via PayPal](https://paypal.me/BLACWARG)
+
+Thank you for your support!
+
+---
+
 ## Credits
 
 - **[Winapp2](https://github.com/MoscaDotTo/Winapp2)** — the bundled `winapp2.ini` cleaning-rules database, licensed [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) by its contributors. It is redistributed unmodified, with its original attribution header intact.
