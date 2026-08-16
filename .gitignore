@@ -17,5 +17,9 @@ _backup_*/
 
 # Tooling / environments
 .opencode/
+.zcode/
 .venv/
 venv/
+
+# Local agent documentation (not published)
+AGENTS.md
