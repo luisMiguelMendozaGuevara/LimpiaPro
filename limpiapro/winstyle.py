@@ -2,6 +2,7 @@
 iconos de aplicaciones extraidos con GDI+ via ctypes (sin dependencias
 externas)."""
 
+import base64
 import ctypes
 import os
 import platform
@@ -11,6 +12,8 @@ import winreg
 
 import customtkinter as ctk
 from ctypes import wintypes
+
+from .uninstall import split_command
 
 FONT_FAMILY = "Segoe UI Variable Text"
 FONT_FAMILY_FALLBACK = "Segoe UI"
@@ -58,9 +61,20 @@ def get_system_accent():
         return "#0067c0"
 
 
+_FONT_CACHE = {}
+
+
 def fluent_font(size=13, weight="normal"):
-    """Fuente Segoe UI Variable con fallback a Segoe UI."""
-    return ctk.CTkFont(family=FONT_FAMILY, size=size, weight=weight)
+    """Fuente Segoe UI Variable con fallback a Segoe UI.
+
+    La instancia CTkFont se cachea por (size, weight): crearla es costoso
+    y ademas mantiene referencias vivas que tkinter necesita."""
+    key = (size, weight)
+    font = _FONT_CACHE.get(key)
+    if font is None:
+        font = ctk.CTkFont(family=FONT_FAMILY, size=size, weight=weight)
+        _FONT_CACHE[key] = font
+    return font
 
 
 # --------------------------------------------------------------------------
@@ -80,19 +94,9 @@ _PNG_CLSID = (ctypes.c_ubyte * 16)(0x06, 0xF4, 0x7C, 0x55, 0x04, 0x1A, 0xD3, 0x1
 
 def _extract_exe_from_command(command):
     """Extrae la ruta del ejecutable de un comando de inicio."""
-    if not command:
-        return None
-    cmd = command.strip()
-    # comando entre comillas
-    if cmd.startswith('"'):
-        end = cmd.find('"', 1)
-        if end != -1:
-            return os.path.expandvars(cmd[1:end])
-        return None
-    # primer token separado por espacio
-    token = cmd.split(None, 1)[0]
-    if os.path.sep in token or token.lower().endswith(".exe"):
-        return os.path.expandvars(token)
+    argv, _err = split_command(command)
+    if argv:
+        return argv[0]
     return None
 
 
@@ -171,11 +175,22 @@ def get_file_icon_png(target, size=16):
 
 class IconCache:
     """Cache de PhotoImage de iconos por ruta (evita re-extraer y mantiene
-    referencias vivas, necesario para que tkinter no las recoja)."""
+    referencias vivas, necesario para que tkinter no las recoja).
+
+    La extraccion de bytes PNG se hace fuera del hilo de UI
+    (get_file_icon_png); los PhotoImage se crean siempre desde el hilo UI
+    via _photo."""
 
     def __init__(self, size=16):
         self.cache = {}
         self.size = size
+
+    def _photo(self, png_bytes):
+        try:
+            # PhotoImage(data=...) espera base64, no bytes crudos.
+            return _tk.PhotoImage(data=base64.b64encode(png_bytes))
+        except Exception:
+            return None
 
     def get(self, target):
         if not target:
@@ -188,9 +203,8 @@ class IconCache:
         data = get_file_icon_png(path)
         if not data:
             return None
-        try:
-            img = _tk.PhotoImage(data=data)
-        except Exception:
+        img = self._photo(data)
+        if img is None:
             return None
         self.cache[path] = img
         return img

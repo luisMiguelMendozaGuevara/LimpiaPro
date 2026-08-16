@@ -21,8 +21,10 @@ from .ui.clean_page import CleanPage
 from .ui.duplicates_page import DuplicatePage
 from .ui.log_page import LogPage
 from .ui.startup_page import StartupPage
+from .ui.theme import ACCENT_FALLBACK
 from .ui.uninstall_page import UninstallPage
 from .ui.update_page import UpdatePage
+from .ui.widgets import post_ui, readonly_toplevel, run_async, start_ui_poller
 
 
 class CleanerApp(ctk.CTk):
@@ -48,7 +50,6 @@ class CleanerApp(ctk.CTk):
         self.categories = build_categories()
         self.scanner = None
         self.busy = False
-        self.clean_page_active = False
 
         # Debounce de redimension: no forzar un repintado por cada evento <Configure>
         self._resize_job = None
@@ -56,10 +57,12 @@ class CleanerApp(ctk.CTk):
 
         self._build_sidebar()
         self._pages = {}
+        self._restyle_tree()
         self.show_page("clean")
 
         self.log(f"{APP_NAME} {APP_VERSION} iniciado. " +
                  ("(administrador)" if is_admin() else "(sin admin)"))
+        start_ui_poller(self)
         self.after(300, self.analyze_all)
 
     def report_callback_exception(self, exc, val, tb):
@@ -170,7 +173,7 @@ class CleanerApp(ctk.CTk):
         self._theme_animating = False
 
     def _highlight_nav(self, active_key):
-        accent = getattr(self, "accent", "#0067c0")
+        accent = getattr(self, "accent", ACCENT_FALLBACK)
         for key, btn in self.nav_buttons.items():
             if key == active_key:
                 btn.configure(fg_color=accent, hover_color=accent, text_color="white")
@@ -246,8 +249,7 @@ class CleanerApp(ctk.CTk):
 
     def set_busy(self, value, mode="determinate"):
         self.busy = value
-        state = "disabled" if value else "normal"
-        self.pages_clean.clean_btn.configure(state=state)
+        self._notify_busy(value)
         self.pages_clean.progress.stop()
         if value:
             self.pages_clean.progress.configure(mode=mode)
@@ -256,6 +258,15 @@ class CleanerApp(ctk.CTk):
         else:
             self.pages_clean.progress.configure(mode="determinate")
             self.pages_clean.progress.set(1)
+
+    def _notify_busy(self, value):
+        for page in self._pages.values():
+            handler = getattr(page, "on_busy", None)
+            if handler:
+                try:
+                    handler(value)
+                except Exception as e:
+                    _errlog(f"on_busy fallo ({type(page).__name__}): {e!r}")
 
     # ------------------------------------------------------------------ analizar
 
@@ -291,11 +302,20 @@ class CleanerApp(ctk.CTk):
             filetypes=[("winapp2.ini", "*.ini"), ("Todos los archivos", "*.*")])
         if not path:
             return
+        self.set_busy(True, mode="indeterminate")
+        self.set_status("Parseando reglas winapp2...")
+        run_async(self, self._load_winapp_worker, self._load_winapp_done,
+                  (path,), on_error=self._load_winapp_error)
+
+    def _load_winapp_worker(self, path):
         rules = parse_winapp_rules(path)
+        return path, rules
+
+    def _load_winapp_apply(self, path, rules):
         found = False
         for c in self.categories:
             if c.key == "winapp":
-                c.rules = [r2 for s in rules for r2 in s["rules"]]
+                c.rules = [r2 for s in rules for r2 in s.rules]
                 c.description = ("Base de datos comunitaria winapp2.ini: "
                                  + (f"{len(rules)} apps detectadas"
                                     if rules else "sin reglas detectadas"))
@@ -311,7 +331,17 @@ class CleanerApp(ctk.CTk):
             messagebox.showinfo(APP_NAME,
                                 "No se detectaron reglas validas (o ningun programa "
                                 "coincide con las condiciones Detect=).")
+        self.set_busy(False)
         self.after(100, self.analyze_all)
+
+    def _load_winapp_done(self, path, rules):
+        self._load_winapp_apply(path, rules)
+
+    def _load_winapp_error(self, exc):
+        self.set_busy(False)
+        self.set_status("Error al cargar reglas winapp2")
+        messagebox.showerror(APP_NAME,
+                             f"Error al parsear las reglas winapp2:\n{exc}")
 
     def _apply_cache(self):
         cached = self._load_cache()
@@ -320,7 +350,6 @@ class CleanerApp(ctk.CTk):
             if entry:
                 cat.size = entry.get("size", 0)
                 cat.files = entry.get("files", 0)
-                self.after(0, self._analyze_one_done, cat)
 
     def _analyze_worker(self):
         # Un solo pase de escaneo, categorias en paralelo (hilos).
@@ -337,7 +366,7 @@ class CleanerApp(ctk.CTk):
                                     + n)
                 progress[cat.key] = n
                 frac = progress["done"] / total_target
-            self.after(0, self._analyze_progress, cat, frac)
+            post_ui(lambda: self._analyze_progress(cat, frac))
 
         threads = []
         for cat in self.categories:
@@ -347,7 +376,7 @@ class CleanerApp(ctk.CTk):
                     c.files = 0
                 else:
                     c.scan(on_progress=lambda n, cc=c: cb(cc, n))
-                self.after(0, self._analyze_one_done, c)
+                post_ui(lambda cc=c: self._analyze_one_done(cc))
             t = threading.Thread(target=work, daemon=True)
             t.start()
             threads.append(t)
@@ -355,7 +384,7 @@ class CleanerApp(ctk.CTk):
             t.join()
 
         self._save_cache()
-        self.after(0, self._analyze_all_done)
+        post_ui(self._analyze_all_done)
 
     def _analyze_progress(self, cat, frac):
         if self.busy:
@@ -368,7 +397,6 @@ class CleanerApp(ctk.CTk):
 
     def _analyze_all_done(self):
         self.set_busy(False)
-        self.clean_page_active = False
         self.set_status("Analisis completado")
         self.update_total()
         _errlog("analisis completado")
@@ -407,8 +435,6 @@ class CleanerApp(ctk.CTk):
         target_all = sum(c.size for c in selected)
         cumulative = 0
         for cat in selected:
-            if self.busy is False:
-                break
             self.log(f"Limpiando: {cat.label} ...")
             if cat.recycle_bin:
                 # Medir ANTES de vaciar: despues ya no queda nada que contar.
@@ -421,12 +447,12 @@ class CleanerApp(ctk.CTk):
                 continue
             removed, errors, freed = cat.clean(
                 on_progress=lambda frac, cum=cumulative, t=target_all:
-                self.after(0, self._clean_progress, cum, t, frac))
+                post_ui(lambda: self._clean_progress(cum, t, frac)))
             cumulative += cat.size
             total_freed += freed
             self.log(f"  Eliminados {removed} elementos, {errors} errores "
                      f"({format_size(freed)} liberados).")
-        self.after(0, self._clean_done, total_freed)
+        post_ui(lambda: self._clean_done(total_freed))
 
     def _clean_progress(self, cum_base, target_all, frac_cat):
         if target_all > 0 and self.busy:
@@ -450,23 +476,41 @@ class CleanerApp(ctk.CTk):
         if sum(c.files for c in selected) == 0 and not any(c.recycle_bin for c in selected):
             messagebox.showinfo(APP_NAME, "No hay archivos que mostrar (todo parece limpio).")
             return
-        win = ctk.CTkToplevel(self)
-        win.title("Vista previa de limpieza")
-        win.geometry("760x520")
-        ctk.CTkLabel(win, text="Archivos que se eliminaran (primeras 1000 entradas)",
-                     font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=16, pady=(12, 4))
-        box = ctk.CTkTextbox(win, font=ctk.CTkFont(family="Consolas", size=11))
-        box.pack(fill="both", expand=True, padx=16, pady=6)
-        box.configure(state="normal")
+        win, box = readonly_toplevel(
+            self, "Vista previa de limpieza", "760x520",
+            "Archivos que se eliminaran (primeras 1000 entradas)")
+        self._preview_box = box
+        self.set_busy(True, mode="indeterminate")
+        run_async(self, self._preview_worker, self._preview_done,
+                  (selected,),
+                  on_error=lambda e: self._preview_error(box, e))
+
+    def _preview_worker(self, selected):
+        out = []
         for cat in selected:
             if cat.recycle_bin:
-                box.insert("end", f"== {cat.label}: se vaciara la papelera ==\n\n")
+                out.append(f"== {cat.label}: se vaciara la papelera ==\n\n")
                 continue
             files, scanned = cat.list_files(1000)
-            box.insert("end", f"== {cat.label} ({len(files)} mostradas de {scanned:,} detectadas) ==\n")
+            out.append(f"== {cat.label} ({len(files)} mostradas de {scanned:,} detectadas) ==\n")
             for f in files:
-                box.insert("end", f"  {f}\n")
-            box.insert("end", "\n")
+                out.append(f"  {f}\n")
+            out.append("\n")
+        return out,
+
+    def _preview_done(self, out):
+        self.set_busy(False)
+        box = self._preview_box
+        box.configure(state="normal")
+        box.delete("1.0", "end")
+        box.insert("1.0", "".join(out))
+        box.configure(state="disabled")
+
+    def _preview_error(self, box, exc):
+        self.set_busy(False)
+        box.configure(state="normal")
+        box.delete("1.0", "end")
+        box.insert("1.0", f"Error al recopilar la vista previa:\n{exc}\n")
         box.configure(state="disabled")
 
 

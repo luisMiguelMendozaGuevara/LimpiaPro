@@ -1,4 +1,4 @@
-"""Pagina: Desinstalador."""
+﻿"""Pagina: Desinstalador."""
 
 from tkinter import messagebox
 
@@ -8,8 +8,8 @@ from .. import APP_NAME
 from ..uninstall import (delete_registry_path, find_leftovers,
                          get_installed_apps, launch_uninstaller)
 from ..utils import _delete_path, format_size
-from ..winstyle import fluent_font
-from .widgets import make_tree, run_async, selected_one
+from .theme import MUTED, ORANGE, ORANGE_HOVER, RED, RED_HOVER, page_header
+from .widgets import fill_tree, make_tree, readonly_toplevel, run_async, selected_one
 
 
 class UninstallPage(ctk.CTkFrame):
@@ -17,22 +17,22 @@ class UninstallPage(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent")
         self.app = app
 
-        ctk.CTkLabel(self, text="Desinstalador",
-                     font=fluent_font(20, "bold")).pack(anchor="w", padx=16, pady=(12, 2))
-        ctk.CTkLabel(self, text="Desinstala programas y busca restos dejados en disco y registro.",
-                     font=fluent_font(12), text_color=("gray40", "gray60")).pack(anchor="w", padx=16)
+        page_header(self, "Desinstalador",
+                    "Desinstala programas y busca restos dejados en disco y registro.")
 
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.pack(fill="x", padx=16, pady=(10, 4))
-        ctk.CTkButton(bar, text="Refrescar", width=100, command=self.refresh).pack(side="left")
-        self.uninstall_btn = ctk.CTkButton(bar, text="Desinstalar", width=120, fg_color="#e65100",
-                                           hover_color="#ef6c00", command=self.uninstall_selected)
+        self.refresh_btn = ctk.CTkButton(bar, text="Refrescar", width=100,
+                                         command=self.refresh)
+        self.refresh_btn.pack(side="left")
+        self.uninstall_btn = ctk.CTkButton(bar, text="Desinstalar", width=120, fg_color=ORANGE, hover_color=ORANGE_HOVER, command=self.uninstall_selected)
         self.uninstall_btn.pack(side="left", padx=8)
-        ctk.CTkButton(bar, text="Buscar restos", width=120, command=self.search_leftovers).pack(side="left", padx=8)
-        self.del_btn = ctk.CTkButton(bar, text="Eliminar restos", width=130, fg_color="#c62828",
-                                     hover_color="#d32f2f", command=self.delete_leftovers)
+        self.search_btn = ctk.CTkButton(bar, text="Buscar restos", width=120,
+                                        command=self.search_leftovers)
+        self.search_btn.pack(side="left", padx=8)
+        self.del_btn = ctk.CTkButton(bar, text="Eliminar restos", width=130, fg_color=RED, hover_color=RED_HOVER, command=self.delete_leftovers)
         self.del_btn.pack(side="left", padx=8)
-        self.info = ctk.CTkLabel(bar, text="", text_color=("gray40", "gray60"))
+        self.info = ctk.CTkLabel(bar, text="", text_color=MUTED)
         self.info.pack(side="right", padx=8)
 
         self.tree_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -41,30 +41,44 @@ class UninstallPage(ctk.CTkFrame):
             self.tree_frame,
             [("#0", "Aplicacion", 360), ("publisher", "Publicador", 240),
              ("size", "Tamano", 100, "e")])
-        self.app._restyle_tree()
 
         self.apps = []
         self.leftovers = []
         self.refresh()
 
     def refresh(self):
+        if self.app.busy:
+            return
         self.app.set_busy(True, mode="indeterminate")
-        run_async(self.app, self._load_worker, self._load_done)
+        run_async(self.app, self._load_worker, self._load_done,
+                  on_error=self._load_error)
 
     def _load_worker(self):
         return (get_installed_apps(),)
 
+    def _load_error(self, exc):
+        self.app.set_busy(False)
+        self.info.configure(text="Error al cargar aplicaciones")
+        self.app.log(f"Error cargando aplicaciones: {exc}")
+
     def _load_done(self, apps):
         self.app.set_busy(False)
         self.apps = apps
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        specs = []
         for i, a in enumerate(apps):
-            self.tree.insert("", "end", iid=str(i), text=a["name"],
-                             values=(a["publisher"],
-                                     format_size(a["size_kb"] * 1024) if a["size_kb"] else ""))
+            specs.append((str(i), "", a["name"],
+                          (a["publisher"],
+                           format_size(a["size_kb"] * 1024) if a["size_kb"] else ""),
+                          {}))
+        fill_tree(self.tree, specs)
         self.info.configure(text=f"{len(apps)} aplicaciones")
         self.app.log(f"Programas instalados: {len(apps)}.")
+
+    def on_busy(self, busy):
+        state = "disabled" if busy else "normal"
+        for btn in (self.refresh_btn, self.uninstall_btn,
+                    self.search_btn, self.del_btn):
+            btn.configure(state=state)
 
     def uninstall_selected(self):
         app = selected_one(self.tree, self.apps)
@@ -80,24 +94,45 @@ class UninstallPage(ctk.CTkFrame):
                 f"{app['uninstall']}\n\nSigue las instrucciones del programa."):
             return
         # Sin shell=True: el comando se divide, se verifica que el ejecutable
-        # existe y se lanza con lista de argumentos.
-        ok, msg = launch_uninstaller(app["uninstall"])
+        # existe y se lanza con lista de argumentos. Se hace en hilo porque
+        # split_command resuelve contra disco (System32/PATH).
+        self.app.set_busy(True, mode="indeterminate")
+        run_async(self.app, self._launch_worker, self._launch_done, (app,),
+                  on_error=lambda exc: self._launch_error(app, exc))
+
+    def _launch_worker(self, app):
+        return app["name"], *launch_uninstaller(app["uninstall"])
+
+    def _launch_done(self, name, ok, msg):
+        self.app.set_busy(False)
         if ok:
-            self.app.log(f"Desinstalador lanzado: {app['name']}")
-            self.app.set_status(f"Desinstalador lanzado: {app['name']}")
+            self.app.log(f"Desinstalador lanzado: {name}")
+            self.app.set_status(f"Desinstalador lanzado: {name}")
         else:
+            self.app.log(f"No se pudo lanzar el desinstalador de {name}: {msg}")
             messagebox.showerror(APP_NAME, f"No se pudo lanzar el desinstalador:\n{msg}")
+
+    def _launch_error(self, app, exc):
+        self.app.set_busy(False)
+        messagebox.showerror(APP_NAME,
+                             f"No se pudo lanzar el desinstalador:\n{exc}")
 
     def search_leftovers(self):
         app = selected_one(self.tree, self.apps)
         if not app:
             return
         self.app.set_busy(True, mode="indeterminate")
-        run_async(self.app, self._leftover_worker, self._leftover_done, (app,))
+        run_async(self.app, self._leftover_worker, self._leftover_done, (app,),
+                  on_error=self._leftover_error)
 
     def _leftover_worker(self, app):
         results = find_leftovers(app["name"], app.get("location", ""))
         return app["name"], results
+
+    def _leftover_error(self, exc):
+        self.app.set_busy(False)
+        self.info.configure(text="")
+        messagebox.showerror(APP_NAME, f"Error al buscar restos:\n{exc}")
 
     def _leftover_done(self, name, results):
         self.app.set_busy(False)
@@ -107,14 +142,9 @@ class UninstallPage(ctk.CTkFrame):
             messagebox.showinfo(APP_NAME, f"No se encontraron restos para: {name}")
             return
         self.app.log(f"Restos de {name}: {len(results)} encontrados.")
-        win = ctk.CTkToplevel(self)
-        win.title("Restos encontrados")
-        win.geometry("680x440")
-        ctk.CTkLabel(win, text=f"Restos encontrados para {name} ({len(results)}):",
-                     font=ctk.CTkFont(size=13, weight="bold"),
-                     text_color=("gray30", "gray70")).pack(anchor="w", padx=14, pady=(10, 2))
-        box = ctk.CTkTextbox(win, font=ctk.CTkFont(family="Consolas", size=11))
-        box.pack(fill="both", expand=True, padx=14, pady=6)
+        win, box = readonly_toplevel(
+            self, "Restos encontrados", "680x440",
+            f"Restos encontrados para {name} ({len(results)}):")
         box.configure(state="normal")
         box.insert("1.0", "\n".join(f"[{kind}] {p}" for kind, p in results))
         box.configure(state="disabled")
@@ -131,7 +161,8 @@ class UninstallPage(ctk.CTkFrame):
         if not messagebox.askyesno(APP_NAME, msg, icon="warning"):
             return
         self.app.set_busy(True, mode="indeterminate")
-        run_async(self.app, self._delete_leftovers_worker, self._delete_leftovers_done)
+        run_async(self.app, self._delete_leftovers_worker, self._delete_leftovers_done,
+                  on_error=self._leftover_error)
 
     def _delete_leftovers_worker(self):
         ok = 0
@@ -151,3 +182,5 @@ class UninstallPage(ctk.CTkFrame):
         self.info.configure(text="")
         self.app.log(f"Restos eliminados: {ok} OK, {err} errores.")
         self.app.set_status(f"Restos eliminados: {ok} OK, {err} errores.")
+
+

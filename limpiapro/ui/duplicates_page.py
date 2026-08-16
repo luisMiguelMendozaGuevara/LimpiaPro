@@ -1,4 +1,4 @@
-"""Pagina: Duplicados."""
+﻿"""Pagina: Duplicados."""
 
 import os
 import tkinter as tk
@@ -9,8 +9,8 @@ import customtkinter as ctk
 from .. import APP_NAME
 from ..duplicates import DuplicateScanner
 from ..utils import _delete_path, _safe_size, format_size
-from ..winstyle import fluent_font
-from .widgets import make_tree, run_async
+from .theme import GREEN, GREEN_HOVER, MUTED, RED, RED_HOVER, page_header
+from .widgets import fill_tree, make_tree, run_async
 
 
 class DuplicatePage(ctk.CTkFrame):
@@ -18,10 +18,8 @@ class DuplicatePage(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent")
         self.app = app
 
-        ctk.CTkLabel(self, text="Archivos duplicados",
-                     font=fluent_font(20, "bold")).pack(anchor="w", padx=16, pady=(12, 2))
-        ctk.CTkLabel(self, text="Escanea una carpeta y encuentra archivos con el mismo contenido (por hash blake2b).",
-                     font=fluent_font(12), text_color=("gray40", "gray60")).pack(anchor="w", padx=16)
+        page_header(self, "Archivos duplicados",
+                    "Escanea una carpeta y encuentra archivos con el mismo contenido (por hash blake2b).")
 
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.pack(fill="x", padx=16, pady=10)
@@ -30,13 +28,15 @@ class DuplicatePage(ctk.CTkFrame):
         ctk.CTkEntry(bar, textvariable=self.folder_path, placeholder_text="Ruta a escanear",
                      state="readonly").pack(side="left", fill="x", expand=True, padx=8)
         self.min_size = ctk.StringVar(value="2 MB")
-        ctk.CTkLabel(bar, text="Tamaño min:").pack(side="left")
+        ctk.CTkLabel(bar, text="TamaÃ±o min:").pack(side="left")
         ctk.CTkOptionMenu(bar, values=["1 MB", "2 MB", "5 MB", "10 MB", "50 MB"],
                           variable=self.min_size, width=90).pack(side="left", padx=6)
-        ctk.CTkButton(bar, text="Buscar duplicados", width=140, fg_color="#2e7d32",
-                      hover_color="#388e3c", command=self.start_scan).pack(side="left", padx=6)
+        self.scan_btn = ctk.CTkButton(bar, text="Buscar duplicados", width=140,
+                                      fg_color=GREEN,
+                                      hover_color=GREEN_HOVER, command=self.start_scan)
+        self.scan_btn.pack(side="left", padx=6)
 
-        self.info = ctk.CTkLabel(self, text="", text_color=("gray40", "gray60"))
+        self.info = ctk.CTkLabel(self, text="", text_color=MUTED)
         self.info.pack(anchor="w", padx=16)
 
         self.tree_frame = ctk.CTkFrame(self, fg_color=("gray92", "#1c1c1e"))
@@ -45,17 +45,23 @@ class DuplicatePage(ctk.CTkFrame):
             self.tree_frame,
             [("#0", "Archivo / grupo", 560), ("dup", "Copias", 70, "center"),
              ("size", "Tamano", 90, "e")])
-        self.app._restyle_tree()
 
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.pack(fill="x", padx=16, pady=(4, 10))
         sel_help = ctk.CTkLabel(bottom, text="Marca los duplicados en el arbol (Ctrl+clic para varios)\ny pulsa Eliminar seleccionados.",
-                                font=ctk.CTkFont(size=11), text_color=("gray40", "gray60"))
+                                font=ctk.CTkFont(size=11), text_color=MUTED)
         sel_help.pack(side="left")
         self.summary = ctk.CTkLabel(bottom, text="", font=ctk.CTkFont(size=12, weight="bold"))
         self.summary.pack(side="left", padx=12)
-        ctk.CTkButton(bottom, text="Eliminar seleccionados", width=180, fg_color="#c62828",
-                      hover_color="#d32f2f", command=self.delete_selected).pack(side="right")
+        self.delete_btn = ctk.CTkButton(bottom, text="Eliminar seleccionados", width=180,
+                                        fg_color=RED, hover_color=RED_HOVER,
+                                        command=self.delete_selected)
+        self.delete_btn.pack(side="right")
+
+    def on_busy(self, busy):
+        state = "disabled" if busy else "normal"
+        self.scan_btn.configure(state=state)
+        self.delete_btn.configure(state=state)
 
     def choose_folder(self):
         path = filedialog.askdirectory(title="Selecciona la carpeta a escanear")
@@ -72,6 +78,8 @@ class DuplicatePage(ctk.CTkFrame):
         return label
 
     def start_scan(self):
+        if self.app.busy:
+            return
         folder = self.folder_path.get()
         if not folder:
             messagebox.showinfo(APP_NAME, "Selecciona una carpeta primero.")
@@ -80,26 +88,32 @@ class DuplicatePage(ctk.CTkFrame):
         self.app.set_status(f"Buscando duplicados en {folder} ...")
         self.app.set_busy(True, mode="indeterminate")
         self.app.scanner = DuplicateScanner(folder, min_mb)
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        self.tree.delete(*self.tree.get_children())
         self.summary.configure(text="Escaneando...")
-        run_async(self.app, self._scan_worker, self._done, (folder,))
+        self.info.configure(text="")
+        self._scan_folder = folder
+        run_async(self.app, self._scan_worker, self._done, (folder,),
+                  on_error=self._scan_error)
 
     def _scan_worker(self, folder):
-        try:
-            return self.app.scanner.scan(), None
-        except Exception as e:
-            return None, str(e)
+        return self.app.scanner.scan(), None
+
+    def _scan_error(self, exc):
+        self.app.set_busy(False)
+        self.summary.configure(text="")
+        self.app.set_status("Busqueda fallo")
+        self.app.log(f"Error en duplicados: {exc}")
+        messagebox.showerror(APP_NAME, f"Error: {exc}")
 
     def _done(self, groups, error):
         self.app.set_busy(False)
         if error:
+            self.summary.configure(text="")
             self.app.set_status("Busqueda fallo")
             self.app.log(f"Error en duplicados: {error}")
             messagebox.showerror(APP_NAME, f"Error: {error}")
             return
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        self.tree.delete(*self.tree.get_children())
         if not groups:
             self.app.set_status("No se encontraron duplicados")
             self.summary.configure(text="No se encontraron archivos duplicados.")
@@ -110,14 +124,16 @@ class DuplicatePage(ctk.CTkFrame):
         self.summary.configure(
             text=f"{len(groups)} grupos duplicados  \u00b7  {format_size(wasted)} recuperables")
         self.info.configure(text=f"Resultados de: {self.folder_path.get()}")
-        for group in groups:
+        specs = []
+        for gi, group in enumerate(groups):
+            gid = f"g{gi}"
             head = (f"{os.path.basename(group[0])}  \u00b7  "
                     f"{format_size(_safe_size(group[0]))}")
-            node = self.tree.insert("", "end", text=head, open=False)
-            self.tree.set(node, "dup", str(len(group)))
-            self.tree.insert(node, "end", text="(original, mantenido)", values=("", ""))
+            specs.append((gid, "", head, (str(len(group)), ""), {"open": False}))
+            specs.append(("", gid, "(original, mantenido)", ("", ""), {}))
             for dup in group[1:]:
-                self.tree.insert(node, "end", text=dup, values=("", ""))
+                specs.append(("", gid, dup, ("", ""), {}))
+        fill_tree(self.tree, specs)
         self.app.set_status(f"Busqueda finalizada: {len(groups)} grupos de duplicados")
         self.app.log(f"Duplicados en {self.folder_path.get()}: {len(groups)} grupos, "
                      f"{dup_count} archivos, {format_size(wasted)} desperdiciados.")
@@ -143,8 +159,6 @@ class DuplicatePage(ctk.CTkFrame):
         removed = 0
         errors = 0
         for p in paths:
-            if self.app.busy is False:
-                break
             if os.path.exists(p):
                 if _delete_path(p):
                     removed += 1
@@ -163,3 +177,4 @@ class DuplicatePage(ctk.CTkFrame):
                 if p and not os.path.exists(p):
                     self.tree.delete(child)
         messagebox.showinfo(APP_NAME, f"Se eliminaron {removed} archivos duplicados.")
+

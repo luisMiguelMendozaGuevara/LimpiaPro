@@ -1,4 +1,4 @@
-"""Pagina: Inicio (apps de inicio, tareas programadas, procesos)."""
+﻿"""Pagina: Inicio (apps de inicio, tareas programadas, procesos)."""
 
 import tkinter as tk
 from tkinter import messagebox
@@ -9,8 +9,10 @@ from .. import APP_NAME
 from ..processes import get_processes, kill_process
 from ..startup import (get_disabled_startup, get_startup_apps, set_startup)
 from ..tasks import get_scheduled_tasks, set_task_enabled
-from ..winstyle import IconCache, fluent_font
-from .widgets import make_tree, run_async, selected_many, selected_one
+from ..winstyle import IconCache
+from .theme import (GREEN, GREEN_HOVER, GREEN_TEXT, MUTED, ORANGE,
+                    ORANGE_HOVER, RED, RED_HOVER, page_header)
+from .widgets import fill_tree, make_tree, run_async, selected_many, selected_one
 
 
 class StartupPage(ctk.CTkFrame):
@@ -18,10 +20,8 @@ class StartupPage(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent")
         self.app = app
 
-        ctk.CTkLabel(self, text="Administrador de inicio",
-                     font=fluent_font(20, "bold")).pack(anchor="w", padx=16, pady=(12, 2))
-        ctk.CTkLabel(self, text="Apps que arrancan con Windows, tareas programadas y procesos activos.",
-                     font=fluent_font(12), text_color=("gray40", "gray60")).pack(anchor="w", padx=16)
+        page_header(self, "Administrador de inicio",
+                    "Apps que arrancan con Windows, tareas programadas y procesos activos.")
 
         self.tabs = ctk.CTkTabview(self)
         self.tabs.pack(fill="both", expand=True, padx=16, pady=10)
@@ -40,9 +40,11 @@ class StartupPage(ctk.CTkFrame):
         tab = self.tabs.tab("Apps de inicio")
         toolbar = ctk.CTkFrame(tab, fg_color="transparent")
         toolbar.pack(fill="x", padx=10, pady=(8, 4))
-        ctk.CTkButton(toolbar, text="Refrescar", width=100, command=self.refresh_startup).pack(side="left")
+        self.startup_refresh_btn = ctk.CTkButton(toolbar, text="Refrescar", width=100,
+                                                 command=self.refresh_startup)
+        self.startup_refresh_btn.pack(side="left")
         self.startup_disable_btn = ctk.CTkButton(toolbar, text="Desactivar seleccionada", width=180,
-                                                 fg_color="#e65100", hover_color="#ef6c00",
+                                                 fg_color=ORANGE, hover_color=ORANGE_HOVER,
                                                  command=self.disable_startup_selected)
         self.startup_disable_btn.pack(side="left", padx=8)
         ctk.CTkButton(toolbar, text="Reactivar desactivadas...", width=190,
@@ -55,14 +57,46 @@ class StartupPage(ctk.CTkFrame):
             frame,
             [("#0", "Nombre", 260), ("src", "Origen", 160),
              ("cmd", "Comando", 420)])
-        self.app._restyle_tree()
         self.startup_data = []
 
     def refresh_startup(self):
-        self.startup_data = get_startup_apps()
-        self._fill_tree(self.startup_tree, self.startup_data,
-                        lambda e: (e["name"], e["source"], e["command"]),
-                        icon_key="command")
+        if self.app.busy:
+            return
+        self.app.set_busy(True, mode="indeterminate")
+        run_async(self.app, self._startup_worker, self._startup_done,
+                  on_error=lambda exc: self._generic_error("inicio", exc))
+
+    def _startup_worker(self):
+        data = get_startup_apps()
+        # Extraccion de iconos fuera del hilo de UI: devolvemos {ruta: png_bytes}.
+        icons = {}
+        for e in data:
+            cmd = e["command"] or ""
+            img_bytes = self._icon_bytes(cmd)
+            if img_bytes is not None:
+                icons[cmd] = img_bytes
+        return data, icons
+
+    def _icon_bytes(self, command):
+        from ..winstyle import get_file_icon_png
+        return get_file_icon_png(command)
+
+    def _startup_done(self, data, icons):
+        self.app.set_busy(False)
+        self.startup_data = data
+        # Los PhotoImage se construyen en el hilo de UI (tkinter).
+        cache = self.icon_cache
+        for command, blob in icons.items():
+            if command and command not in cache.cache:
+                cache.cache[command] = cache._photo(blob)
+        specs = []
+        for i, e in enumerate(data):
+            kw = {}
+            img = cache.cache.get(e["command"] or "")
+            if img is not None:
+                kw["image"] = img
+            specs.append((str(i), "", e["name"], (e["source"], e["command"]), kw))
+        fill_tree(self.startup_tree, specs)
         self.app.log(f"Apps de inicio: {len(self.startup_data)} encontradas.")
 
     def disable_startup_selected(self):
@@ -93,9 +127,20 @@ class StartupPage(ctk.CTkFrame):
         self.refresh_startup()
 
     def show_disabled_startup(self):
-        disabled = get_disabled_startup()
+        if self.app.busy:
+            return
+        self.app.set_busy(True, mode="indeterminate")
+        run_async(self.app, self._disabled_worker, self._disabled_done,
+                  on_error=lambda exc: self._generic_error("desactivadas", exc))
+
+    def _disabled_worker(self):
+        return get_disabled_startup(),
+
+    def _disabled_done(self, disabled):
+        self.app.set_busy(False)
         if not disabled:
-            messagebox.showinfo(APP_NAME, "No hay aplicaciones de inicio desactivadas.")
+            messagebox.showinfo(APP_NAME,
+                                "No hay aplicaciones de inicio desactivadas.")
             return
         win = ctk.CTkToplevel(self)
         win.title("Reactivar aplicaciones de inicio")
@@ -105,9 +150,9 @@ class StartupPage(ctk.CTkFrame):
         frame = ctk.CTkFrame(win, fg_color="transparent")
         frame.pack(fill="both", expand=True)
         tree = make_tree(frame, [("#0", "Nombre", 240), ("cmd", "Comando / archivo", 360)])
-        for i, e in enumerate(disabled):
-            tree.insert("", "end", iid=str(i), text=e["name"],
-                        values=(e["command"] or e.get("filename", "")))
+        specs = [(str(i), "", e["name"], (e["command"] or e.get("filename", "")), {})
+                 for i, e in enumerate(disabled)]
+        fill_tree(tree, specs)
 
         def _re():
             sel = selected_many(tree, disabled)
@@ -117,8 +162,7 @@ class StartupPage(ctk.CTkFrame):
             run_async(self.app, self._reenable_worker,
                       self._reenable_done, (sel, win))
 
-        ctk.CTkButton(win, text="Reactivar seleccionadas", width=180, fg_color="#2e7d32",
-                      hover_color="#388e3c", command=_re).pack(padx=14, pady=8)
+        ctk.CTkButton(win, text="Reactivar seleccionadas", width=180, fg_color=GREEN, hover_color=GREEN_HOVER, command=_re).pack(padx=14, pady=8)
 
     def _reenable_worker(self, entries, win):
         results = []
@@ -137,20 +181,26 @@ class StartupPage(ctk.CTkFrame):
         win.destroy()
         self.refresh_startup()
 
-    # ------------------------------------------------------------- tareas programadas
+    def on_busy(self, busy):
+        state = "disabled" if busy else "normal"
+        for btn in (self.startup_refresh_btn, self.startup_disable_btn):
+            btn.configure(state=state)
 
     def _build_tasks_tab(self):
         tab = self.tabs.tab("Tareas programadas")
         toolbar = ctk.CTkFrame(tab, fg_color="transparent")
         toolbar.pack(fill="x", padx=10, pady=(8, 4))
-        ctk.CTkButton(toolbar, text="Refrescar", width=100, command=self.refresh_tasks).pack(side="left")
+        self.tasks_refresh_btn = ctk.CTkButton(toolbar, text="Refrescar", width=100,
+                                               command=self.refresh_tasks)
+        self.tasks_refresh_btn.pack(side="left")
         self.tasks_disable_btn = ctk.CTkButton(toolbar, text="Desactivar", width=110,
-                                               fg_color="#e65100", hover_color="#ef6c00",
+                                               fg_color=ORANGE, hover_color=ORANGE_HOVER,
                                                command=lambda: self._toggle_task(False))
         self.tasks_disable_btn.pack(side="left", padx=8)
-        ctk.CTkButton(toolbar, text="Activar", width=100, fg_color="#2e7d32",
-                      hover_color="#388e3c", command=lambda: self._toggle_task(True)).pack(side="left")
-        self.tasks_info = ctk.CTkLabel(toolbar, text="", text_color=("gray40", "gray60"))
+        self.tasks_enable_btn = ctk.CTkButton(toolbar, text="Activar", width=100, fg_color=GREEN, hover_color=GREEN_HOVER,
+                                              command=lambda: self._toggle_task(True))
+        self.tasks_enable_btn.pack(side="left")
+        self.tasks_info = ctk.CTkLabel(toolbar, text="", text_color=MUTED)
         self.tasks_info.pack(side="right", padx=8)
 
         frame = ctk.CTkFrame(tab, fg_color="transparent")
@@ -160,12 +210,14 @@ class StartupPage(ctk.CTkFrame):
             [("#0", "Tarea", 300), ("status", "Estado", 90, "center"),
              ("sched", "Planificacion", 130, "center"),
              ("next", "Proxima ejecucion", 180)])
-        self.app._restyle_tree()
         self.tasks_data = []
 
     def refresh_tasks(self):
+        if self.app.busy:
+            return
         self.app.set_busy(True, mode="indeterminate")
-        run_async(self.app, self._refresh_tasks_worker, self._refresh_tasks_done)
+        run_async(self.app, self._refresh_tasks_worker, self._refresh_tasks_done,
+                  on_error=lambda exc: self._generic_error("tareas", exc))
 
     def _refresh_tasks_worker(self):
         return (get_scheduled_tasks(),)
@@ -173,10 +225,9 @@ class StartupPage(ctk.CTkFrame):
     def _refresh_tasks_done(self, tasks):
         self.app.set_busy(False)
         self.tasks_data = tasks
-        for item in self.tasks_tree.get_children():
-            self.tasks_tree.delete(item)
         enabled = 0
         disabled = 0
+        specs = []
         for i, t in enumerate(tasks):
             state = t.get("scheduled") or t.get("status", "")
             is_disabled = ("disabled" in state.lower())
@@ -185,12 +236,13 @@ class StartupPage(ctk.CTkFrame):
             else:
                 enabled += 1
             tag = "disabled" if is_disabled else "enabled"
-            self.tasks_tree.insert("", "end", iid=str(i), text=t["name"],
-                                   values=(state, t.get("status", ""), t.get("next", "")),
-                                   tags=(tag,))
-        self.tasks_tree.tag_configure("disabled", foreground="#e65100")
-        self.tasks_tree.tag_configure("enabled", foreground="#2e9e5b")
-        self.tasks_info.configure(text=f"{enabled} activas · {disabled} desactivadas")
+            specs.append((str(i), "", t["name"],
+                          (state, t.get("status", ""), t.get("next", "")),
+                          {"tags": (tag,)}))
+        self.tasks_tree.tag_configure("disabled", foreground=ORANGE)
+        self.tasks_tree.tag_configure("enabled", foreground=GREEN_TEXT)
+        fill_tree(self.tasks_tree, specs)
+        self.tasks_info.configure(text=f"{enabled} activas - {disabled} desactivadas")
         self.app.log(f"Tareas programadas: {len(tasks)} cargadas.")
 
     def _toggle_task(self, enable):
@@ -225,9 +277,11 @@ class StartupPage(ctk.CTkFrame):
         tab = self.tabs.tab("Procesos activos")
         toolbar = ctk.CTkFrame(tab, fg_color="transparent")
         toolbar.pack(fill="x", padx=10, pady=(8, 4))
-        ctk.CTkButton(toolbar, text="Refrescar", width=100, command=self.refresh_processes).pack(side="left")
+        self.proc_refresh_btn = ctk.CTkButton(toolbar, text="Refrescar", width=100,
+                                              command=self.refresh_processes)
+        self.proc_refresh_btn.pack(side="left")
         self.kill_btn = ctk.CTkButton(toolbar, text="Terminar proceso", width=140,
-                                      fg_color="#c62828", hover_color="#d32f2f",
+                                      fg_color=RED, hover_color=RED_HOVER,
                                       command=self.kill_selected)
         self.kill_btn.pack(side="left", padx=8)
         self.proc_search_var = ctk.StringVar()
@@ -242,12 +296,14 @@ class StartupPage(ctk.CTkFrame):
             [("#0", "Proceso", 260), ("pid", "PID", 70, "center"),
              ("session", "Sesion", 80, "center"), ("mem", "Memoria", 90, "e"),
              ("user", "Usuario", 160)])
-        self.app._restyle_tree()
         self.proc_data = []
 
     def refresh_processes(self):
+        if self.app.busy:
+            return
         self.app.set_busy(True, mode="indeterminate")
-        run_async(self.app, self._refresh_processes_worker, self._refresh_processes_done)
+        run_async(self.app, self._refresh_processes_worker, self._refresh_processes_done,
+                  on_error=lambda exc: self._generic_error("procesos", exc))
 
     def _refresh_processes_worker(self):
         return (get_processes(),)
@@ -256,17 +312,28 @@ class StartupPage(ctk.CTkFrame):
         self.app.set_busy(False)
         self.proc_data = procs
         search = self.proc_search_var.get().strip().lower()
-        for item in self.proc_tree.get_children():
-            self.proc_tree.delete(item)
+        specs = []
         count = 0
         for p in procs:
             if search and search not in p["name"].lower():
                 continue
             count += 1
-            self.proc_tree.insert("", "end", iid=p["pid"],
-                                  text=p["name"],
-                                  values=(p["pid"], p["session"], p["mem"], p["user"]))
+            specs.append((str(p["pid"]), "", p["name"],
+                          (p["pid"], p["session"], p["mem"], p["user"]), {}))
+        fill_tree(self.proc_tree, specs)
         self.app.log(f"Procesos: {count} mostrados.")
+
+    def on_busy(self, busy):
+        state = "disabled" if busy else "normal"
+        for btn in (self.tasks_refresh_btn, self.tasks_disable_btn,
+                    self.tasks_enable_btn, self.proc_refresh_btn, self.kill_btn):
+            btn.configure(state=state)
+
+    def _generic_error(self, area, exc):
+        self.app.set_busy(False)
+        self.app.set_status(f"Error al cargar {area}")
+        self.app.log(f"Error en {area}: {exc}")
+        messagebox.showerror(APP_NAME, f"Error al cargar {area}:\n{exc}")
 
     def kill_selected(self):
         sel = self.proc_tree.selection()
@@ -296,14 +363,4 @@ class StartupPage(ctk.CTkFrame):
             messagebox.showerror(APP_NAME, f"No se pudo terminar:\n{msg}")
         self.refresh_processes()
 
-    def _fill_tree(self, tree, data, row_fn, icon_key=None):
-        for item in tree.get_children():
-            tree.delete(item)
-        for i, entry in enumerate(data):
-            name, src, cmd = row_fn(entry)
-            kw = {}
-            if icon_key is not None:
-                img = self.icon_cache.get(entry.get(icon_key) or "")
-                if img is not None:
-                    kw["image"] = img
-            tree.insert("", "end", iid=str(i), text=name, values=(src, cmd), **kw)
+

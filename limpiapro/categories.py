@@ -4,14 +4,14 @@ import fnmatch
 import os
 import threading
 
-from .utils import (_delete_path, _fast_folder_stats, _parallel_map,
-                    _safe_size, glob_like)
+from .utils import (PROGRESS_DELETE, PROGRESS_RULES, _delete_path,
+                    _fast_folder_stats, _parallel_map, _safe_size, glob_like)
 from .winapp2 import default_winapp_file, parse_winapp_rules
 
 
 def user_dirs():
     return {
-        "temp": os.environ.get("TEMP", r"%LOCALAPPDATA%\Temp"),
+        "temp": r"%TEMP%",
         "win_temp": r"C:\Windows\Temp",
         "prefetch": r"C:\Windows\Prefetch",
         "recent": r"%APPDATA%\Microsoft\Windows\Recent",
@@ -76,18 +76,24 @@ class CleanCategory:
         return out
 
     @staticmethod
-    def _match_name(name, patterns):
-        if not patterns:
+    def _match_name(name, patterns_lower):
+        if not patterns_lower:
             return True
-        for p in patterns:
-            if fnmatch.fnmatch(name.lower(), p.lower()):
+        low = name.lower()
+        for p in patterns_lower:
+            if fnmatch.fnmatch(low, p):
                 return True
         return False
 
     def _rule_roots(self):
-        """Genera (regla, raiz_existente) para cada regla winapp2."""
+        """Genera (regla, raiz_existente) para cada regla winapp2.
+
+        La raiz se normaliza y absolutiza una sola vez aqui: is_excluded
+        (winapp2) recibe rutas absolutas y solo aplica normcase, evitando
+        una llamada GetFullPathName por archivo."""
         for rule in self.rules or []:
-            root = os.path.expandvars(rule.root)
+            root = os.path.normcase(os.path.abspath(
+                os.path.expandvars(rule.root)))
             if os.path.exists(root):
                 yield rule, root
 
@@ -101,7 +107,7 @@ class CleanCategory:
         if self.rules:
             for rule, root in self._rule_roots():
                 if os.path.isfile(root):
-                    if (self._match_name(os.path.basename(root), rule.patterns)
+                    if (self._match_name(os.path.basename(root), rule.patterns_lower)
                             and not rule.is_excluded(root)):
                         yield rule, root
                     continue
@@ -110,7 +116,7 @@ class CleanCategory:
                         dirs[:] = []
                     for name in fnames:
                         path = os.path.join(cur, name)
-                        if (self._match_name(name, rule.patterns)
+                        if (self._match_name(name, rule.patterns_lower)
                                 and not rule.is_excluded(path)):
                             yield rule, path
         else:
@@ -132,7 +138,7 @@ class CleanCategory:
         for _rule, path in self._iter_targets():
             self.size += _safe_size(path)
             self.files += 1
-            if on_progress and self.files % 100 == 0:
+            if on_progress and self.files % PROGRESS_RULES == 0:
                 on_progress(self.files)
         return self.size
 
@@ -155,7 +161,10 @@ class CleanCategory:
         return self.size
 
     def list_files(self, limit=1000):
-        """Devuelve (rutas, total_detectadas) para la vista previa."""
+        """Devuelve (rutas, numero_escaneado) para la vista previa.
+
+        La cuenta escaneada se detiene al llegar al limite (`len(files)
+        <= limit`), no es el total real de objetivos."""
         files = []
         scanned = 0
         for _rule, path in self._iter_targets():
@@ -174,7 +183,7 @@ class CleanCategory:
         for rule, path in self._iter_targets():
             targets.append(path)
             if rule is not None and rule.remove_self:
-                root = os.path.expandvars(rule.root)
+                root = os.path.abspath(os.path.expandvars(rule.root))
                 if root not in remove_roots:
                     remove_roots.append(root)
         # Evitar doble borrado si dos reglas/ubicaciones solapan.
@@ -198,7 +207,7 @@ class CleanCategory:
                     state["errors"] += 1
                 done, freed = state["done"], state["freed"]
             # Progreso troceado para no saturar la GUI con after(0, ...).
-            if on_progress and target_bytes > 0 and done % 20 == 0:
+            if on_progress and target_bytes > 0 and done % PROGRESS_DELETE == 0:
                 on_progress(min(freed / target_bytes, 1.0))
 
         _parallel_map(_delete_one, targets)
@@ -213,7 +222,9 @@ class CleanCategory:
         removed = state["removed"]
         errors = state["errors"]
         freed = state["freed"]
-        self.size = self.scan()
+        # No re-escanear aqui: la UI re-analiza todo al terminar la limpieza
+        # (analyze_all). Aproximar hasta ese refresh evita un recorrido extra.
+        self.size = max(0, self.size - freed)
         self.files = removed
         self.errors = errors
         return removed, errors, freed
@@ -276,7 +287,7 @@ def build_categories():
         ("Base de datos comunitaria winapp2.ini: "
          + (f"{len(rules)} apps detectadas" if rules else "sin reglas cargadas")),
         [], "\U0001F4E6")
-    cat_winapp.rules = [r2 for s in rules for r2 in s["rules"]]
+    cat_winapp.rules = [r2 for s in rules for r2 in s.rules]
     cat_winapp.needs_admin = True
     cats.append(cat_winapp)
 

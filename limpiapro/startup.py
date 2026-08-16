@@ -3,37 +3,39 @@
 import os
 import winreg
 
-RUN_KEYS = [
-    (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", "Usuario (HKCU Run)"),
-    (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\RunOnce", "Usuario (HKCU RunOnce)"),
-    (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Run", "Sistema (HKLM Run)"),
-    (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\RunOnce", "Sistema (HKLM RunOnce)"),
+# Una unica lista fuente: (hive, clave_activa, clave_desactivadas, etiqueta).
+_RUN_PAIRS = [
+    (winreg.HKEY_CURRENT_USER,
+     r"Software\Microsoft\Windows\CurrentVersion\Run",
+     r"Software\Microsoft\Windows\CurrentVersion\RunDisabled",
+     "Usuario (HKCU Run)"),
+    (winreg.HKEY_CURRENT_USER,
+     r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
+     r"Software\Microsoft\Windows\CurrentVersion\RunOnceDisabled",
+     "Usuario (HKCU RunOnce)"),
+    (winreg.HKEY_LOCAL_MACHINE,
+     r"Software\Microsoft\Windows\CurrentVersion\Run",
+     r"Software\Microsoft\Windows\CurrentVersion\RunDisabled",
+     "Sistema (HKLM Run)"),
+    (winreg.HKEY_LOCAL_MACHINE,
+     r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
+     r"Software\Microsoft\Windows\CurrentVersion\RunOnceDisabled",
+     "Sistema (HKLM RunOnce)"),
 ]
+
+# Claves activas (para listar apps de inicio).
+RUN_KEYS = [(h, a, src) for h, a, _d, src in _RUN_PAIRS]
+
+# Claves de desactivadas (para la lista "reactivar").
+RUN_KEYS_DISABLED = [(h, d, "Usuario (desactivadas)") for h, _a, d, _s in _RUN_PAIRS]
+
+# Mapa: (hive, clave_activa) -> (hive, clave_desactivadas).
+RUN_KEY_TO_DISABLED = {(h, a): (h, d) for h, a, d, _s in _RUN_PAIRS}
 
 STARTUP_FOLDERS = [
     os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"),
     os.path.expandvars(r"%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs\StartUp"),
 ]
-
-# La clave "Disabled" respalda los valores que el usuario desactiva
-RUN_KEYS_DISABLED = [
-    (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\RunDisabled", "Usuario (desactivadas)"),
-    (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\RunOnceDisabled", "Usuario (desactivadas)"),
-    (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\RunDisabled", "Sistema (desactivadas)"),
-    (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\RunOnceDisabled", "Sistema (desactivadas)"),
-]
-
-# Mapa: (hive, clave_activa) -> (hive, clave_desactivadas)
-RUN_KEY_TO_DISABLED = {
-    (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run"):
-        (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\RunDisabled"),
-    (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\RunOnce"):
-        (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\RunOnceDisabled"),
-    (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Run"):
-        (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\RunDisabled"),
-    (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\RunOnce"):
-        (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\RunOnceDisabled"),
-}
 
 
 def _read_reg_entries(hive, subkey):
@@ -52,6 +54,19 @@ def _read_reg_entries(hive, subkey):
     except OSError:
         pass
     return out
+
+
+def _read_reg_value(hive, subkey, name):
+    """Lee un valor suelto sin enumerar toda la clave."""
+    try:
+        with winreg.OpenKey(hive, subkey) as key:
+            try:
+                val, _ = winreg.QueryValueEx(key, name)
+                return val
+            except OSError:
+                return None
+    except OSError:
+        return None
 
 
 def get_startup_apps():
@@ -101,9 +116,8 @@ def set_startup(entry, enable):
             hive, subkey = entry["hive"], entry["subkey"]
             if enable:
                 # mover de RunDisabled de vuelta a Run
-                target = RUN_KEY_TO_DISABLED.get((hive, subkey), (hive, subkey))
-                d_hive, d_subkey = target
-                value = _read_reg_entries(d_hive, d_subkey).get(entry["name"])
+                d_hive, d_subkey = RUN_KEY_TO_DISABLED.get((hive, subkey), (hive, subkey))
+                value = _read_reg_value(d_hive, d_subkey, entry["name"])
                 if value is None:
                     return False, "No se encontro la entrada desactivada."
                 with winreg.CreateKey(hive, subkey) as k:
@@ -114,11 +128,10 @@ def set_startup(entry, enable):
                     except OSError:
                         pass
             else:
-                value = _read_reg_entries(hive, subkey).get(entry["name"])
+                value = _read_reg_value(hive, subkey, entry["name"])
                 if value is None:
                     return False, "La entrada ya no existe."
-                target = RUN_KEY_TO_DISABLED.get((hive, subkey))
-                d_hive, d_subkey = target
+                d_hive, d_subkey = RUN_KEY_TO_DISABLED.get((hive, subkey))
                 with winreg.CreateKey(d_hive, d_subkey) as k:
                     winreg.SetValueEx(k, entry["name"], 0, winreg.REG_SZ, str(value))
                 with winreg.OpenKey(hive, subkey, 0, winreg.KEY_SET_VALUE) as k:

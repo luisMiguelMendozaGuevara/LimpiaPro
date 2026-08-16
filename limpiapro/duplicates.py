@@ -2,9 +2,10 @@
 
 import hashlib
 import os
-from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait as _future_wait
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import BLOCK_SIZE
+from .utils import iter_file_sizes
 
 
 class DuplicateScanner:
@@ -49,76 +50,53 @@ class DuplicateScanner:
         except OSError:
             return None
 
-    def _hash_paths(self, paths, hasher):
-        """Hasea paths en paralelo (hasta _workers hilos) comprobando cancel.
-        Devuelve {hash: [paths]} o None si se cancela."""
+    def _hash_paths(self, paths, hasher, pool):
+        """Hasea paths en paralelo usando `pool` (que el scan crea una sola
+        vez). Devoluciones {hash: [paths]} o None si se cancela."""
         results = {}
-        it = iter(paths)
-        pending = []
-        with ThreadPoolExecutor(max_workers=self._workers) as pool:
-            def _refill():
-                while len(pending) < self._workers * 2:
-                    p = next(it, None)
-                    if p is None:
-                        return
-                    pending.append((p, pool.submit(hasher, p)))
-
-            _refill()
-            while pending:
-                if self.cancel:
-                    for _, f in pending:
-                        f.cancel()
-                    return None
-                done, _ = _future_wait([f for _, f in pending], timeout=0.2,
-                                       return_when=FIRST_COMPLETED)
-                if not done:
-                    continue
-                for f in done:
-                    for i in range(len(pending)):
-                        if pending[i][1] is f:
-                            p = pending[i][0]
-                            h = f.result()
-                            if h is not None:
-                                results.setdefault(h, []).append(p)
-                            pending.pop(i)
-                            break
-                _refill()
+        fut_to_path = {}
+        for p in paths:
+            fut_to_path[pool.submit(hasher, p)] = p
+        for fut in as_completed(fut_to_path):
+            if self.cancel:
+                for f in fut_to_path:
+                    f.cancel()
+                return None
+            p = fut_to_path[fut]
+            h = fut.result()
+            if h is not None:
+                results.setdefault(h, []).append(p)
         return results
 
     def scan(self):
         self.groups = []
         by_size = {}
-        for root, dirs, files in os.walk(self.folder):
+        for path, size in iter_file_sizes(self.folder):
             if self.cancel:
                 return []
-            for name in files:
-                if self.cancel:
-                    return []
-                path = os.path.join(root, name)
-                try:
-                    size = os.path.getsize(path)
-                except OSError:
-                    continue
-                if size >= self.min_size:
-                    by_size.setdefault(size, []).append(path)
+            if size >= self.min_size:
+                by_size.setdefault(size, []).append(path)
 
-        for size, paths in by_size.items():
-            if self.cancel:
-                break
-            if len(paths) < 2:
-                continue
-            pre = self._hash_paths(paths, self._prehash)
-            if pre is None:
-                break
-            cands = [p for grp in pre.values() if len(grp) > 1 for p in grp]
-            if not cands:
-                continue
-            if self.cancel:
-                break
-            full = self._hash_paths(cands, self._full_hash)
-            if full is None:
-                break
-            for h, group in full.items():
-                if len(group) > 1:
-                    self.groups.append(group)
+        # Un unico pool reutilizado en todas las fases (evita cientos de
+        # pools creados/destruidos y el polling de _future_wait).
+        with ThreadPoolExecutor(max_workers=self._workers) as pool:
+            for size, paths in by_size.items():
+                if self.cancel:
+                    break
+                if len(paths) < 2:
+                    continue
+                pre = self._hash_paths(paths, self._prehash, pool)
+                if pre is None:
+                    break
+                cands = [p for grp in pre.values() if len(grp) > 1 for p in grp]
+                if not cands:
+                    continue
+                if self.cancel:
+                    break
+                full = self._hash_paths(cands, self._full_hash, pool)
+                if full is None:
+                    break
+                for h, group in full.items():
+                    if len(group) > 1:
+                        self.groups.append(group)
         return self.groups

@@ -2,17 +2,15 @@
 
 import csv
 import io
-import subprocess
+
+from .utils import _errlog, run_system_cmd
 
 
 def get_processes():
     """Lista de procesos: {name, pid, mem, session, title}."""
     procs = []
     try:
-        result = subprocess.run(
-            ["tasklist", "/fo", "CSV", "/v"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+        result = run_system_cmd(["tasklist", "/fo", "CSV", "/v"])
         for row in csv.reader(io.StringIO(result.stdout)):
             if len(row) < 6:
                 continue
@@ -25,18 +23,15 @@ def get_processes():
                 "user": user.strip(),
                 "title": title.strip(),
             })
-    except Exception:
-        pass
+    except Exception as e:
+        _errlog(f"tasklist fallo: {e!r}")
     return procs
 
 
 def kill_process(pid):
     """Termina un proceso. Devuelve (ok, msg)."""
     try:
-        result = subprocess.run(
-            ["taskkill", "/PID", str(pid), "/F"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+        result = run_system_cmd(["taskkill", "/PID", str(pid), "/F"], timeout=30)
         msg = (result.stdout or result.stderr or "").strip()
         return result.returncode == 0, msg or "OK"
     except Exception as e:

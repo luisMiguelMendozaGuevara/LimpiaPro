@@ -34,7 +34,6 @@ Limpiador de sistema estilo CCleaner (uso personal). Interfaz grafica moderna co
 | `limpiapro/ui/uninstall_page.py` | Pagina de desinstalador |
 | `limpiapro/ui/log_page.py` | Pagina de registro de actividad |
 | `limpiapro/ui/__init__.py` | Marker de subpaquete |
-| `mascota.py` | Mascota de escritorio opcional |
 | `winapp2.ini` | Base de datos comunitaria de reglas winapp2 (parseada por `parse_winapp_rules`) |
 | `LimpiaPro.spec` | Spec de PyInstaller (one-file, sin consola, embebe datos de customtkinter) |
 | `LimpiaPro.bat` | Lanzador que ejecuta `limpiador.py` con el Python 3.12 |

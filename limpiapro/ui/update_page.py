@@ -1,13 +1,12 @@
-"""Pagina: Restos de Windows Update (WinSxS / DISM)."""
+﻿"""Pagina: Restos de Windows Update (WinSxS / DISM)."""
 
 import subprocess
 
 import customtkinter as ctk
 from tkinter import messagebox
-
 from .. import APP_NAME
 from ..utils import _folder_size, format_size
-from ..winstyle import fluent_font
+from .theme import MUTED, ORANGE, ORANGE_HOVER, page_header
 from .widgets import run_async
 
 
@@ -16,20 +15,20 @@ class UpdatePage(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent")
         self.app = app
 
-        ctk.CTkLabel(self, text="Restos de Windows Update",
-                     font=fluent_font(20, "bold")).pack(anchor="w", padx=16, pady=(12, 2))
-        ctk.CTkLabel(self, text="Limpia componentes antiguos (WinSxS) y versiones previas de "
-                                " actualizaciones. Requiere administrador.",
-                     font=fluent_font(12), text_color=("gray40", "gray60")).pack(anchor="w", padx=16)
+        page_header(self, "Restos de Windows Update",
+                    "Limpia componentes antiguos (WinSxS) y versiones previas de "
+                    " actualizaciones. Requiere administrador.")
 
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.pack(fill="x", padx=16, pady=(10, 4))
-        ctk.CTkButton(bar, text="Analizar", width=110, command=self.analyze).pack(side="left")
+        self.analyze_btn = ctk.CTkButton(bar, text="Analizar", width=110,
+                                         command=self.analyze)
+        self.analyze_btn.pack(side="left")
         self.clean_btn = ctk.CTkButton(bar, text="Limpiar actualizaciones", width=190,
-                                       fg_color="#e65100", hover_color="#ef6c00",
+                                       fg_color=ORANGE, hover_color=ORANGE_HOVER,
                                        command=self.clean)
         self.clean_btn.pack(side="left", padx=8)
-        self.size_lbl = ctk.CTkLabel(bar, text="calculando...", text_color=("gray40", "gray60"))
+        self.size_lbl = ctk.CTkLabel(bar, text="calculando...", text_color=MUTED)
         self.size_lbl.pack(side="right", padx=8)
 
         self.out = ctk.CTkTextbox(self, font=ctk.CTkFont(family="Consolas", size=11),
@@ -37,7 +36,13 @@ class UpdatePage(ctk.CTkFrame):
         self.out.pack(fill="both", expand=True, padx=16, pady=8)
         self.out.configure(state="disabled")
 
-        run_async(self.app, self._measure, self._measure_done)
+        run_async(self.app, self._measure, self._measure_done,
+              on_error=lambda exc: self._measure_error(exc))
+
+    def _measure_error(self, exc):
+        self.app.set_busy(False)
+        self.size_lbl.configure(text="no disponible")
+        self.app.log(f"Error midiendo WinSxS: {exc}")
 
     def _log_out(self, text):
         self.out.configure(state="normal")
@@ -56,7 +61,17 @@ class UpdatePage(ctk.CTkFrame):
             return
         self.app.set_busy(True, mode="indeterminate")
         self._log_out(f">> {label}")
-        run_async(self.app, self._dism_worker, self._dism_done, (args,))
+        run_async(self.app, self._dism_worker, self._dism_done, (args,),
+                  on_error=lambda exc: self._dism_error(exc))
+
+    def _dism_error(self, exc):
+        self.app.set_busy(False)
+        self._log_out(f"Error: {exc}")
+
+    def on_busy(self, busy):
+        state = "disabled" if busy else "normal"
+        self.analyze_btn.configure(state=state)
+        self.clean_btn.configure(state=state)
 
     def _dism_worker(self, args):
         try:
@@ -84,3 +99,4 @@ class UpdatePage(ctk.CTkFrame):
                 "El proceso puede tardar varios minutos (DISM).\n\nContinuar?"):
             return
         self._run_dism(["/StartComponentCleanup"], "Limpiando componentes antiguos...")
+
