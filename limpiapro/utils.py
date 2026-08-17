@@ -4,6 +4,7 @@ import ctypes
 import glob as globmod
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -141,6 +142,115 @@ def _delete_path(path: str) -> bool:
         return not os.path.exists(path)
     except OSError:
         return False
+
+
+def _make_writable(path: str) -> None:
+    """Clear the read-only attribute (Windows) so the file can be removed."""
+    try:
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+    except OSError:
+        pass
+
+
+def _safe_rmdir(path: str) -> None:
+    """Remove an empty directory, tolerating read-only attributes."""
+    try:
+        os.rmdir(path)
+    except OSError:
+        _make_writable(path)
+        try:
+            os.rmdir(path)
+        except OSError:
+            pass
+
+
+def _delete_measured(path: str) -> Tuple[bool, int]:
+    """Delete a file or a whole folder tree in ONE traversal, returning
+    (gone, freed_bytes).
+
+    Folder sizes are tallied straight from the cached os.scandir entry
+    stats while the tree is being removed, so a directory is walked only
+    once (the old measure-then-rmtree pattern scanned it twice, which
+    doubled the I/O on multi-GB temp/cache trees).
+
+    Follows the forgiving semantics of rmtree(ignore_errors=True):
+    read-only files become writable, failures leave leftovers, and
+    symlinks/junctions are removed without following their target."""
+    if not os.path.isdir(path) or os.path.islink(path) or os.path.isjunction(path):
+        # Regular file or a top-level symlink/junction (never followed).
+        size = 0
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            pass
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                os.remove(path)
+        except OSError:
+            _make_writable(path)
+            try:
+                if os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    os.remove(path)
+            except OSError:
+                pass
+        return not os.path.exists(path), size
+
+    freed = 0
+    stack = []
+    try:
+        stack.append((path, os.scandir(path)))
+    except OSError:
+        return not os.path.exists(path), freed
+
+    def _remove_file(entry) -> None:
+        nonlocal freed
+        try:
+            freed += entry.stat().st_size
+        except OSError:
+            pass
+        try:
+            os.remove(entry.path)
+        except OSError:
+            _make_writable(entry.path)
+            try:
+                os.remove(entry.path)
+            except OSError:
+                pass
+
+    while stack:
+        try:
+            entry = next(stack[-1][1])
+        except StopIteration:
+            d, it = stack.pop()
+            it.close()
+            _safe_rmdir(d)
+            continue
+        except OSError:
+            d, it = stack.pop()
+            it.close()
+            continue
+        try:
+            if entry.is_dir(follow_symlinks=False):
+                if os.path.islink(entry.path) or os.path.isjunction(entry.path):
+                    # Junction/symlink: remove the link, never its target.
+                    try:
+                        shutil.rmtree(entry.path, ignore_errors=True)
+                    except OSError:
+                        pass
+                    continue
+                sub = os.scandir(entry.path)
+                if sub is not None:
+                    stack.append((entry.path, sub))
+            else:
+                _remove_file(entry)
+        except OSError:
+            continue
+    _safe_rmdir(path)
+    return not os.path.exists(path), freed
 
 
 def _safe_size(path: str) -> int:

@@ -509,6 +509,7 @@ class CleanerApp(ctk.CTk):
                            msg=t("msg.recycle_emptied") if ok else msg))
                 continue
             removed, errors, freed = cat.clean(
+                target_bytes=cat.size,
                 on_progress=lambda frac, cum=cumulative, tot=target_all:
                 post_ui(lambda: self._clean_progress(cum, tot, frac)))
             cumulative += cat.size

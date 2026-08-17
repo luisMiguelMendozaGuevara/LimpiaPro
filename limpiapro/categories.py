@@ -13,7 +13,7 @@ import os
 import threading
 
 from .i18n import t
-from .utils import (PROGRESS_DELETE, PROGRESS_RULES, _delete_path,
+from .utils import (PROGRESS_DELETE, PROGRESS_RULES, _delete_measured,
                     _fast_folder_stats, _parallel_map, _safe_size, glob_like)
 from .winapp2 import default_winapp_file, parse_winapp_rules
 
@@ -230,8 +230,7 @@ class CleanCategory:
         state = {"removed": 0, "errors": 0, "freed": 0, "done": 0}
 
         def _delete_one(target):
-            size = _safe_size(target)
-            ok = _delete_path(target)
+            ok, size = _delete_measured(target)
             with lock:
                 state["done"] += 1
                 if ok:
