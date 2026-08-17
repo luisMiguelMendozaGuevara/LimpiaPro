@@ -2,8 +2,7 @@
 
 import os
 
-from limpiapro.uninstall import matches_leftover, split_command
-
+from limpiapro.uninstall import _registry_target_allowed, matches_leftover, split_command
 
 # ------------------------------------------------------------------ split_command
 
@@ -57,3 +56,33 @@ def test_short_tokens_ignored():
     assert not matches_leftover("AI Thing", "AI Launcher")
     # "Thing" does count
     assert matches_leftover("AI Thing", "Thing")
+
+
+# ------------------------------------------------------------------ registry safety
+
+def test_registry_target_requires_software_root():
+    assert _registry_target_allowed(r"Software\MyApp") is True
+    assert _registry_target_allowed(r"Software\Wow6432Node\MyApp") is True
+    assert _registry_target_allowed(r"Software") is False
+    assert _registry_target_allowed("") is False
+
+
+def test_registry_target_refuses_blocked_namespaces():
+    assert _registry_target_allowed(r"Software\Microsoft\Office") is False
+    assert _registry_target_allowed(r"Software\Classes") is False
+    assert _registry_target_allowed(r"Software\Policies\Foo") is False
+    assert _registry_target_allowed(r"Software\Wow6432Node\Microsoft\X") is False
+
+
+def test_registry_target_refuses_non_software():
+    assert _registry_target_allowed(r"Classes\MyApp") is False
+    assert _registry_target_allowed(r"Policies\Foo") is False
+
+
+def test_delete_registry_path_rejects_unsafe_paths():
+    from limpiapro.uninstall import delete_registry_path
+    # Never allowed, so it must not touch the registry at all.
+    assert delete_registry_path(r"HKLM\Software\Microsoft\Windows") is False
+    assert delete_registry_path(r"HKCU\Software") is False
+    assert delete_registry_path(r"HKLM\Classes\Foo") is False
+    assert delete_registry_path("") is False

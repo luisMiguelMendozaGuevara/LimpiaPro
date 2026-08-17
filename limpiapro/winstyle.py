@@ -9,9 +9,10 @@ import platform
 import tempfile
 import tkinter as _tk
 import winreg
+from ctypes import wintypes
+from typing import Literal
 
 import customtkinter as ctk
-from ctypes import wintypes
 
 from .uninstall import split_command
 
@@ -65,7 +66,7 @@ def get_system_accent():
 _FONT_CACHE = {}
 
 
-def fluent_font(size=13, weight="normal"):
+def fluent_font(size=13, weight: Literal["normal", "bold"] = "normal"):
     """Segoe UI Variable font with fallback to Segoe UI.
 
     CTkFont instances are cached by (size, weight): creating them is
@@ -119,7 +120,7 @@ def get_file_icon_png(target, size=16):
         class SHFILEINFO(ctypes.Structure):
             _fields_ = [('hIcon', wintypes.HICON),
                         ('iIcon', ctypes.c_int),
-                        ('dwAttributes', ctypes.cDWORD),
+                        ('dwAttributes', ctypes.c_ulong),
                         ('szDisplayName', ctypes.c_wchar * 260),
                         ('szTypeName', ctypes.c_wchar * 80)]
 

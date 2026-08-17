@@ -2,8 +2,6 @@
 
 import subprocess
 
-import pytest
-
 from limpiapro.utils import _oem_cp, run_system_cmd
 
 

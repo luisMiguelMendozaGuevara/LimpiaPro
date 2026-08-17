@@ -53,8 +53,12 @@ _STRINGS = {
         "status.analyzing": "Analizando sistema...",
         "status.parsing_winapp": "Parseando reglas winapp2...",
         "status.analysis_done": "Analisis completado",
+        "status.analyze_cancelled": "Analisis cancelado",
+        "log.analyze_cancelled": "Analisis cancelado por el usuario.",
         "status.cleaning": "Limpiando...",
         "status.clean_done": "Limpieza completada - {size} liberados",
+        "status.clean_cancelled": "Limpieza cancelada",
+        "log.clean_cancelled": "Limpieza cancelada por el usuario.",
         "log.total_freed": "Total liberado: {size}",
         "dialog.winapp_title": "Seleccionar archivo de reglas winapp2",
         "dialog.winapp_filter": "winapp2.ini",
@@ -73,7 +77,10 @@ _STRINGS = {
         "log.cat_cleaned": ("  Eliminados {n} elementos, {e} errores "
                             "({size} liberados)."),
         "msg.clean_detail_base": ("Se eliminaran definitivamente los archivos "
-                                  "temporales, la cache y el historial.\n"),
+                                  "temporales, la cache y el historial.\n"
+                                  "RECOMENDACION: cierra los navegadores "
+                                  "(Chrome, Edge, Firefox, etc.) antes de "
+                                  "limpiar para evitar errores.\n"),
         "msg.clean_detail_recycle": "\nATENCION: se vaciara la PAPELERA DE RECICLAJE.\n",
         "msg.clean_detail_admin": ("\nAVISO: se requiere ejecutar como "
                                    "administrador para limpiar archivos del "
@@ -87,6 +94,14 @@ _STRINGS = {
         "preview.recycle_section": "== {label}: se vaciara la papelera ==",
         "preview.section": "== {label} ({shown} mostradas de {total} detectadas) ==",
         "msg.preview_error": "Error al recopilar la vista previa:\n{exc}",
+        "log.error_kind": "    {n} -> {kind}",
+        "errk.in_use": "archivo en uso",
+        "errk.access_denied": "acceso denegado",
+        "errk.not_found": "desaparecio durante el analisis",
+        "errk.readonly": "archivo de solo lectura",
+        "errk.dir_not_empty": "carpeta no vacia",
+        "errk.safety": "bloqueado por la politica de seguridad",
+        "errk.other": "otro",
         # ------------------------------------------------------- clean page
         "clean.title": "Limpieza del sistema",
         "clean.subtitle": ("Selecciona lo que quieres limpiar. Nada se "
@@ -94,6 +109,7 @@ _STRINGS = {
         "btn.select_all": "Seleccionar todo",
         "btn.none": "Ninguno",
         "btn.preview": "Vista previa",
+        "btn.cancel": "Cancelar",
         "btn.winapp_rules": "Reglas winapp2...",
         "btn.clean_selected": "Limpiar seleccionado",
         "clean.total_calculating": "Total seleccionado: calculando...",
@@ -176,6 +192,8 @@ _STRINGS = {
         "msg.kill_process": ("Terminar el proceso:\n\n  {name} (PID {pid}) "
                              "?\n\nSe cerrara de forma forzosa y se perderan "
                              "cambios sin guardar."),
+        "msg.process_protected": ("{name} es un proceso critico del sistema "
+                                  "y no se puede terminar."),
         "log.process_killed": "Proceso terminado: {name}",
         "status.process_killed": "Proceso terminado: {name}",
         "status.process_error": "Error al terminar proceso",
@@ -211,6 +229,7 @@ _STRINGS = {
         "dupes.none_found": "No se encontraron archivos duplicados.",
         "dupes.summary": "{n} grupos duplicados - {size} recuperables",
         "dupes.results_of": "Resultados de: {folder}",
+        "dupes.unreadable": "{n} archivo(s) no se pudieron leer y se omitieron.",
         "dupes.group_head": "{name} - {size}",
         "dupes.original": "(original, mantenido)",
         "status.dupes_done": "Busqueda finalizada: {n} grupos de duplicados",
@@ -223,6 +242,7 @@ _STRINGS = {
         "msg.space_to_free": "({size} a liberar)",
         "status.dupes_deleted": "Duplicados eliminados: {n}, errores: {e}",
         "log.dupes_deleted": "Eliminados {n} duplicados ({e} errores).",
+        "log.dupes_changed": "{n} archivo(s) cambiaron desde el escaneo y se omitieron.",
         "msg.dupes_deleted": "Se eliminaron {n} archivos duplicados.",
         # ------------------------------------------------------- uninstall page
         "uninstall.title": "Desinstalador",
@@ -311,8 +331,12 @@ _STRINGS = {
         "status.analyzing": "Analyzing system...",
         "status.parsing_winapp": "Parsing winapp2 rules...",
         "status.analysis_done": "Analysis complete",
+        "status.analyze_cancelled": "Analysis cancelled",
+        "log.analyze_cancelled": "Analysis cancelled by the user.",
         "status.cleaning": "Cleaning...",
         "status.clean_done": "Cleanup finished - {size} freed",
+        "status.clean_cancelled": "Cleanup cancelled",
+        "log.clean_cancelled": "Cleanup cancelled by the user.",
         "log.total_freed": "Total freed: {size}",
         "dialog.winapp_title": "Select winapp2 rules file",
         "dialog.winapp_filter": "winapp2.ini",
@@ -328,7 +352,10 @@ _STRINGS = {
         "log.recycle_line": "  Recycle bin: {msg}",
         "log.cat_cleaned": "  Removed {n} items, {e} errors ({size} freed).",
         "msg.clean_detail_base": ("Temporary files, caches and history will "
-                                  "be permanently deleted.\n"),
+                                  "be permanently deleted.\n"
+                                  "RECOMMENDATION: close your browsers "
+                                  "(Chrome, Edge, Firefox, etc.) before "
+                                  "cleaning to avoid errors.\n"),
         "msg.clean_detail_recycle": "\nWARNING: the RECYCLE BIN will be emptied.\n",
         "msg.clean_detail_admin": ("\nNOTE: administrator rights are required "
                                    "to clean system files.\n"),
@@ -340,6 +367,14 @@ _STRINGS = {
         "preview.recycle_section": "== {label}: recycle bin will be emptied ==",
         "preview.section": "== {label} ({shown} shown of {total} detected) ==",
         "msg.preview_error": "Error collecting the preview:\n{exc}",
+        "log.error_kind": "    {n} -> {kind}",
+        "errk.in_use": "file in use",
+        "errk.access_denied": "access denied",
+        "errk.not_found": "disappeared during the scan",
+        "errk.readonly": "read-only file",
+        "errk.dir_not_empty": "directory not empty",
+        "errk.safety": "blocked by the delete safety policy",
+        "errk.other": "other",
         # ------------------------------------------------------- clean page
         "clean.title": "System cleanup",
         "clean.subtitle": ("Choose what you want to clean. Nothing is deleted "
@@ -347,6 +382,7 @@ _STRINGS = {
         "btn.select_all": "Select all",
         "btn.none": "None",
         "btn.preview": "Preview",
+        "btn.cancel": "Cancel",
         "btn.winapp_rules": "winapp2 rules...",
         "btn.clean_selected": "Clean selected",
         "clean.total_calculating": "Selected total: calculating...",
@@ -428,6 +464,8 @@ _STRINGS = {
         "msg.kill_process": ("End the process:\n\n  {name} (PID {pid}) ?\n\n"
                              "It will be closed forcefully and unsaved "
                              "changes will be lost."),
+        "msg.process_protected": ("{name} is a critical system process "
+                                  "and cannot be ended."),
         "log.process_killed": "Process ended: {name}",
         "status.process_killed": "Process ended: {name}",
         "status.process_error": "Error ending process",
@@ -463,6 +501,7 @@ _STRINGS = {
         "dupes.none_found": "No duplicate files were found.",
         "dupes.summary": "{n} duplicate groups - {size} recoverable",
         "dupes.results_of": "Results from: {folder}",
+        "dupes.unreadable": "{n} file(s) could not be read and were skipped.",
         "dupes.group_head": "{name} - {size}",
         "dupes.original": "(original, kept)",
         "status.dupes_done": "Search finished: {n} duplicate groups",
@@ -474,6 +513,7 @@ _STRINGS = {
         "msg.space_to_free": "({size} to free)",
         "status.dupes_deleted": "Duplicates deleted: {n}, errors: {e}",
         "log.dupes_deleted": "Deleted {n} duplicates ({e} errors).",
+        "log.dupes_changed": "{n} file(s) changed since the scan and were skipped.",
         "msg.dupes_deleted": "{n} duplicate files were deleted.",
         # ------------------------------------------------------- uninstall page
         "uninstall.title": "Uninstaller",

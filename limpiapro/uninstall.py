@@ -20,6 +20,15 @@ _PROTECTED_KEY_NAMES = {
     "squirreltemp", "temp",
 }
 
+# Registry namespaces that must never be deleted even under
+# HKCU/HKLM\Software: well-known shared trees whose loss breaks Windows.
+_BLOCKED_REGISTRY_NAMESPACES = {
+    "microsoft", "classes", "windows", "policies", "clients",
+    "registeredapplications", "odbc", "explorer", "commonfiles",
+    "programfiles", "shell", "class", "installer", "event",
+    "help", "fonts", "schemes", "tools", "types",
+}
+
 
 def get_installed_apps():
     """List installed applications from the registry Uninstall keys.
@@ -88,17 +97,46 @@ def _hive_name(hive):
     return "?"
 
 
+def _registry_target_allowed(sub_path):
+    """True when a registry path is a legitimate deletion target.
+
+    Only sub-trees under *Software* are ever considered (the uninstaller
+    never touches Classes, Policies, shell extensions, etc.), and the
+    well-known shared namespaces are refused even there. This is the
+    second barrier so delete_registry_path() cannot be pointed at an
+    arbitrary hive root."""
+    parts = [p.lower() for p in sub_path.replace("/", "\\").split("\\")
+             if p.strip()]
+    if not parts or parts[0] != "software":
+        return False
+    if len(parts) == 1:
+        return False  # never delete Software itself
+    body = parts[1:]
+    if body[0] == "wow6432node":
+        body = body[1:]
+        if not body:
+            return False
+    for p in body:
+        if p in _BLOCKED_REGISTRY_NAMESPACES:
+            return False
+    return True
+
+
 def delete_registry_path(path):
     """Recursively delete a registry key. path: 'HKCU\\Software\\Foo'.
 
     Children are deleted depth-first (always enumerating index 0, because
     each deletion shifts the remaining children up), then the key itself.
+    The path is validated as a legitimate target first: only HKCU/HKLM
+    trees under Software and outside the blocked namespaces are accepted.
     Returns True on success, False on any failure (permissions, missing
-    key, malformed path)."""
+    key, malformed or unsafe path)."""
     try:
         hive_name, sub = path.split("\\", 1)
         hive = (winreg.HKEY_CURRENT_USER if hive_name.upper() == "HKCU"
                 else winreg.HKEY_LOCAL_MACHINE)
+        if not _registry_target_allowed(sub):
+            return False
 
         def _rec(h, key_path):
             with winreg.OpenKey(h, key_path, 0, winreg.KEY_READ | winreg.KEY_WRITE) as k:
@@ -175,7 +213,7 @@ def launch_uninstaller(command):
     if argv is None:
         return False, err
     try:
-        subprocess.Popen(argv, shell=False,
+        subprocess.Popen(argv, shell=False,  # nosec B603 - arg list, no shell
                          creationflags=subprocess.CREATE_NO_WINDOW)
         return True, "OK"
     except OSError as e:
@@ -208,6 +246,18 @@ def matches_leftover(name, text):
     return all(t in low for t in tokens)
 
 
+def _app_still_registered(name):
+    """True when an app with the same normalized DisplayName is still in the
+    Uninstall keys (i.e. it was NOT actually uninstalled)."""
+    target = _norm(name)
+    if not target:
+        return False
+    for app in get_installed_apps():
+        if _norm(app["name"]) == target:
+            return True
+    return False
+
+
 def find_leftovers(name, location=""):
     """Search disk and registry for leftovers of a program.
 
@@ -215,12 +265,17 @@ def find_leftovers(name, location=""):
     tag "folder" or "registry" (translated for display by the UI). Scans
     the install location, %APPDATA%, %LOCALAPPDATA%, %PROGRAMDATA% and the
     Software keys of HKCU/HKLM (including WOW6432Node), skipping the
-    protected generic key names."""
+    protected generic key names.
+
+    The InstallLocation folder is only offered when the application is no
+    longer present in the Uninstall registry (proof it was uninstalled):
+    blindly proposing a live install dir for whole deletion is the risk
+    this module must not make."""
     leftovers = []
     if not name:
         return leftovers
 
-    if location and os.path.exists(location):
+    if location and os.path.exists(location) and not _app_still_registered(name):
         leftovers.append(("folder", location))
     for base in (os.path.expandvars(r"%APPDATA%"), os.path.expandvars(r"%LOCALAPPDATA%"),
                  os.path.expandvars(r"%PROGRAMDATA%")):

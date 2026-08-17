@@ -1,2 +1,5 @@
 pytest>=8.0
 pyinstaller>=6.22
+ruff>=0.8
+pyright>=1.1.380
+bandit>=1.7

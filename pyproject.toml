@@ -1,0 +1,28 @@
+[project]
+name = "limpiapro"
+version = "2.2"
+description = "CCleaner-style system cleaner"
+requires-python = ">=3.10"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = ["build", "dist", "_backup_20260814_173918"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4"]
+ignore = ["E501"]
+
+[tool.pyright]
+exclude = ["build", "dist"]
+reportMissingImports = true
+reportMissingTypeStubs = false
+reportGeneralTypeIssues = "warning"
+reportAttributeAccessIssue = "warning"
+
+[tool.bandit]
+exclude_dirs = ["build", "dist", "tests", "conftest.py"]
+# B101: assert in tests; B404: subprocess import noise (each actual call-site
+# carries a # nosec B603 with justification since every invocation passes an
+# arg list and shell=False, never a shell string).
+skips = ["B101", "B404"]

@@ -47,3 +47,30 @@ def test_missing_location_is_ignored(tmp_path):
     cat.scan()
     assert cat.files == 0
     assert cat.size == 0
+
+
+def test_clean_uses_preview_snapshot_not_rewalk(tmp_path):
+    """P0-3: after list_files, clean() deletes exactly the snapshotted
+    targets; files created in between are NOT picked up."""
+    cat = _make_cat(tmp_path)
+    files_before, total = cat.list_files()
+    assert total == 3
+    # A new file appears after the preview (e.g. a running browser).
+    late = tmp_path / "cache" / "late.bin"
+    late.write_bytes(b"z" * 5)
+    removed, errors, freed = cat.clean()
+    assert errors == 0
+    assert removed == 3
+    assert freed == 160
+    assert late.exists() is True  # created after the snapshot: untouched
+    assert not (tmp_path / "loose.txt").exists()
+
+
+def test_clean_without_preview_still_works(tmp_path):
+    """Without a prior list_files snapshot, clean() re-walks (old path)."""
+    cat = _make_cat(tmp_path)
+    extra = tmp_path / "cache" / "late.bin"
+    extra.write_bytes(b"z" * 5)
+    removed, errors, freed = cat.clean()
+    assert removed == 4
+    assert freed == 165

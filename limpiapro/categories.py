@@ -12,9 +12,19 @@ import fnmatch
 import os
 import threading
 
+from .audit_log import audit
 from .i18n import t
-from .utils import (PROGRESS_DELETE, PROGRESS_RULES, _delete_measured,
-                    _fast_folder_stats, _parallel_map, _safe_size, glob_like)
+from .utils import (
+    PROGRESS_DELETE,
+    PROGRESS_RULES,
+    DeleteError,
+    _delete_measured,
+    _fast_folder_stats,
+    _parallel_map,
+    _safe_size,
+    glob_like,
+    is_safe_delete_target,
+)
 from .winapp2 import default_winapp_file, parse_winapp_rules
 
 
@@ -80,10 +90,12 @@ class CleanCategory:
         self.icon = icon
         self.needs_admin = False
         self.recycle_bin = False
-        self.rules = None
+        self.rules: list = []
         self.size = 0
         self.files = 0
         self.errors = 0
+        self.delete_errors = []
+        self._snapshot = None
 
     def _locations_existing(self):
         """Expand %ENV% vars and glob wildcards, keeping existing paths only."""
@@ -118,7 +130,7 @@ class CleanCategory:
             if os.path.exists(root):
                 yield rule, root
 
-    def _iter_targets(self):
+    def _iter_targets(self, should_cancel=None):
         """Iterate (rule_or_None, path) over everything the category would
         clean.
 
@@ -128,12 +140,16 @@ class CleanCategory:
         whole when cleaning)."""
         if self.rules:
             for rule, root in self._rule_roots():
+                if should_cancel and should_cancel():
+                    return
                 if os.path.isfile(root):
                     if (self._match_name(os.path.basename(root), rule.patterns_lower)
                             and not rule.is_excluded(root)):
                         yield rule, root
                     continue
                 for cur, dirs, fnames in os.walk(root):
+                    if should_cancel and should_cancel():
+                        return
                     if not rule.recurse:
                         dirs[:] = []
                     for name in fnames:
@@ -143,16 +159,20 @@ class CleanCategory:
                             yield rule, path
         else:
             for loc in self._locations_existing():
+                if should_cancel and should_cancel():
+                    return
                 if os.path.isdir(loc):
                     try:
                         for name in os.listdir(loc):
+                            if should_cancel and should_cancel():
+                                return
                             yield None, os.path.join(loc, name)
                     except OSError:
                         pass
                 else:
                     yield None, loc
 
-    def _scan_rules(self, on_progress=None):
+    def _scan_rules(self, on_progress=None, should_cancel=None):
         """Scan winapp2-rule targets: measure each matched file/folder.
 
         Each category is scanned on its own thread; roots are walked
@@ -160,48 +180,90 @@ class CleanCategory:
         disk)."""
         self.size = 0
         self.files = 0
-        for _rule, path in self._iter_targets():
+        for _rule, path in self._iter_targets(should_cancel):
             self.size += _safe_size(path)
             self.files += 1
             if on_progress and self.files % PROGRESS_RULES == 0:
                 on_progress(self.files)
         return self.size
 
-    def scan(self, on_progress=None):
+    def scan(self, on_progress=None, should_cancel=None):
         """Measure the category: total bytes and file count. Rule-based
         categories use _scan_rules; plain ones use the fast scandir stats."""
+        audit.log_operation(
+            operation="scan",
+            category=self.key,
+            action="start",
+            result="success"
+        )
+        
         if self.rules:
-            return self._scan_rules(on_progress)
-        self.size = 0
-        self.files = 0
-        for loc in self._locations_existing():
-            if os.path.isdir(loc):
-                size, files = _fast_folder_stats(loc, on_progress)
-                self.size += size
-                self.files += files
-            else:
-                self.files += 1
-                try:
-                    self.size += os.path.getsize(loc)
-                except OSError:
-                    pass
-        return self.size
+            size = self._scan_rules(on_progress, should_cancel)
+        else:
+            self.size = 0
+            self.files = 0
+            for loc in self._locations_existing():
+                if should_cancel and should_cancel():
+                    break
+                if os.path.isdir(loc):
+                    size, files = _fast_folder_stats(loc, on_progress, should_cancel)
+                    self.size += size
+                    self.files += files
+                else:
+                    self.files += 1
+                    try:
+                        self.size += os.path.getsize(loc)
+                    except OSError:
+                        pass
+            size = self.size
+        
+        audit.log_operation(
+            operation="scan",
+            category=self.key,
+            action="complete",
+            result="success",
+            details={"size_bytes": self.size, "file_count": self.files}
+        )
+        return size
 
     def list_files(self, limit=1000):
-        """Return (paths, scanned_count) for the preview dialog.
+        """Return (paths, scanned_count) for the preview dialog and SNAPSHOT
+        the exact target set (P0-3).
 
-        The scanned count stops at the limit (`len(files) <= limit`), so it
-        is not the real total number of targets."""
-        files = []
-        scanned = 0
-        for _rule, path in self._iter_targets():
-            scanned += 1
-            files.append(path)
-            if len(files) >= limit:
-                break
+        The preview shows the first `limit` paths, but the snapshot keeps
+        the full list so clean() deletes exactly what was collected here
+        (revalidated per-path by the safety layer), instead of re-walking
+        the filesystem and picking up new files created in between."""
+        targets = list(self._iter_targets())
+        self._snapshot = targets
+        scanned = len(targets)
+        files = [path for _rule, path in targets[:limit]]
         return files, scanned
 
-    def clean(self, on_file=None, on_progress=None, target_bytes=0):
+    def _collect(self):
+        """Return (targets, remove_roots) to delete. Prefers the snapshot
+        taken by list_files (clean = what the preview showed); falls back
+        to a fresh walk when no preview happened."""
+        if self._snapshot is not None:
+            targets = [p for _r, p in self._snapshot]
+            remove_roots = [os.path.abspath(os.path.expandvars(r.root))
+                            for r, _p in self._snapshot
+                            if r is not None and r.remove_self]
+            self._snapshot = None
+        else:
+            targets = []
+            remove_roots = []
+            for rule, path in self._iter_targets():
+                targets.append(path)
+                if rule is not None and rule.remove_self:
+                    root = os.path.abspath(os.path.expandvars(rule.root))
+                    if root not in remove_roots:
+                        remove_roots.append(root)
+        targets = list(dict.fromkeys(targets))
+        return targets, list(dict.fromkeys(remove_roots))
+
+    def clean(self, on_file=None, on_progress=None, target_bytes=0,
+              should_cancel=None):
         """Delete every target of the category in parallel.
 
         Targets are collected in one pass and deleted through _parallel_map
@@ -212,25 +274,44 @@ class CleanCategory:
         After cleaning there is no re-scan here: the UI re-analyzes
         everything when the cleanup finishes (analyze_all). Approximating
         until that refresh avoids one extra full traversal."""
-        targets = []
-        remove_roots = []
-        for rule, path in self._iter_targets():
-            targets.append(path)
-            if rule is not None and rule.remove_self:
-                root = os.path.abspath(os.path.expandvars(rule.root))
-                if root not in remove_roots:
-                    remove_roots.append(root)
-        # Avoid double deletion when two rules/locations overlap.
-        targets = list(dict.fromkeys(targets))
+        targets, remove_roots = self._collect()
         if on_file:
             for target in targets:
                 on_file(target)
 
         lock = threading.Lock()
         state = {"removed": 0, "errors": 0, "freed": 0, "done": 0}
+        error_detail: list[DeleteError] = []
 
         def _delete_one(target):
-            ok, size = _delete_measured(target)
+            if should_cancel and should_cancel():
+                return
+            ok, size, errors = _delete_measured(target)
+            
+            # Audit log: record each deletion attempt (P1-16)
+            if ok:
+                audit.log_operation(
+                    operation="cleanup",
+                    category=self.key,
+                    action="delete",
+                    path=target,
+                    result="success",
+                    details={"freed_bytes": size}
+                )
+            else:
+                # Log each error with its details
+                for err in errors:
+                    audit.log_operation(
+                        operation="cleanup",
+                        category=self.key,
+                        action="delete",
+                        path=err.path,
+                        result="failed",
+                        error_code=err.code,
+                        error_msg=err.message,
+                        details={"operation": err.operation, "kind": err.kind}
+                    )
+            
             with lock:
                 state["done"] += 1
                 if ok:
@@ -238,6 +319,7 @@ class CleanCategory:
                     state["freed"] += size
                 else:
                     state["errors"] += 1
+                error_detail.extend(errors)
                 done, freed = state["done"], state["freed"]
             # Chunked progress so the GUI is not flooded with after(0, ...).
             if on_progress and target_bytes > 0 and done % PROGRESS_DELETE == 0:
@@ -245,12 +327,20 @@ class CleanCategory:
 
         _parallel_map(_delete_one, targets)
 
-        # REMOVESELF: remove the rule folder itself when left empty.
+        # REMOVESELF: remove the rule folder itself when left empty. The
+        # safety layer still applies: a rule must not remove a protected
+        # root even if it asks for REMOVESELF.
         for root in remove_roots:
+            if not is_safe_delete_target(root):
+                error_detail.append(DeleteError(
+                    path=root, operation="rmdir", kind="safety",
+                    message="REMOVESELF refused by delete safety policy"))
+                state["errors"] += 1
+                continue
             try:
                 os.rmdir(root)
             except OSError:
-                pass
+                state["errors"] += 1
 
         removed = state["removed"]
         errors = state["errors"]
@@ -258,7 +348,15 @@ class CleanCategory:
         self.size = max(0, self.size - freed)
         self.files = removed
         self.errors = errors
+        self.delete_errors = error_detail
         return removed, errors, freed
+
+    def error_summary(self) -> dict[str, int]:
+        """Count deleted-path failures per kind (for the UI/log report)."""
+        out: dict[str, int] = {}
+        for e in getattr(self, "delete_errors", []):
+            out[e.kind] = out.get(e.kind, 0) + 1
+        return out
 
 
 def build_categories():

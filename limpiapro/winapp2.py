@@ -16,8 +16,9 @@ import fnmatch
 import os
 import re
 import winreg
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Optional
 
 from .utils import app_dir, glob_like
 
@@ -53,7 +54,7 @@ class ExcludeKey:
     __slots__ = ("root", "patterns", "recursive", "exact")
 
     def __init__(self, root: str = "", patterns=("*",),
-                 recursive: bool = False, exact: Optional[str] = None):
+                 recursive: bool = False, exact: str | None = None):
         self.root = os.path.normcase(os.path.abspath(root)) if root else ""
         self.patterns = tuple(patterns)
         self.recursive = recursive
@@ -127,7 +128,7 @@ class WinAppRule:
         return any(ex.matches(norm) for ex in self.excludes)
 
 
-def _parse_filekey(val: str, excludes) -> Optional[WinAppRule]:
+def _parse_filekey(val: str, excludes) -> WinAppRule | None:
     """Parse 'path|masks|OPTION' (OPTION: RECURSE or REMOVESELF).
 
     A path ending in '\\*' also marks recursion ('*' cannot be part of a
@@ -158,12 +159,12 @@ class WinAppSection:
     Replaces the string-keyed dicts of the old parse_sections; rules
     carry their section's ExcludeKeys already applied."""
     name: str
-    detects: List[str] = field(default_factory=list)
+    detects: list[str] = field(default_factory=list)
     special: bool = False
-    rules: List[WinAppRule] = field(default_factory=list)
+    rules: list[WinAppRule] = field(default_factory=list)
 
 
-def _parse_sections(text: str) -> List[WinAppSection]:
+def _parse_sections(text: str) -> list[WinAppSection]:
     """Two-pass parsing: first accumulate filekeys/excludes, then build
     the rules (a rule needs all the ExcludeKeys of its section)."""
     sections = []
@@ -209,13 +210,22 @@ def _parse_sections(text: str) -> List[WinAppSection]:
     return sections
 
 
-def parse_sections(text: str) -> List[WinAppSection]:
+def parse_sections(text: str) -> list[WinAppSection]:
     """Parse the text of a winapp2.ini into sections (detection not
     checked). Returns a list of WinAppSection."""
     return _parse_sections(text)
 
 
 _DETECT_CACHE = {}
+
+
+def invalidate_detect_cache():
+    """Drop every cached Detect= result.
+
+    Called when a different winapp2.ini is loaded: conditions memoized
+    from the previous file (or an older install state) must not be reused
+    for the new file."""
+    _DETECT_CACHE.clear()
 
 
 def detect_true(condition: str) -> bool:
@@ -257,7 +267,7 @@ def _detect_true(d: str) -> bool:
         return False
 
 
-def active_sections(sections) -> List[WinAppSection]:
+def active_sections(sections) -> list[WinAppSection]:
     """Filter the sections whose detection passes.
 
     Several Detect/Detect1..N conditions combine with AND (winapp2
@@ -279,11 +289,11 @@ def default_winapp_file() -> str:
     return os.path.join(app_dir(), "winapp2.ini")
 
 
-def parse_winapp_rules(path: str) -> List[WinAppSection]:
+def parse_winapp_rules(path: str) -> list[WinAppSection]:
     """Parse a winapp2.ini file and return the active sections (apps
     detected as installed): a list of WinAppSection."""
     try:
-        with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
             text = f.read()
     except OSError:
         return []

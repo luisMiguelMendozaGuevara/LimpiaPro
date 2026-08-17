@@ -120,13 +120,59 @@ def get_disabled_startup():
     return entries
 
 
+def _reg_transfer(hive_src, subkey_src, hive_dst, subkey_dst, name, value):
+    """Move a registry value from one key to another, rolling back on
+    failure.
+
+    The write to the destination is preceded by a read of any previous
+    destination value; if deleting the source entry fails, the
+    destination is restored exactly as it was (or the fresh value
+    removed), so a failure can never leave the entry duplicated on both
+    keys. Returns nothing; raises OSError on failure."""
+    prev = None
+    prev_type = winreg.REG_SZ
+    with winreg.CreateKey(hive_dst, subkey_dst) as kdst:
+        try:
+            prev, prev_type = winreg.QueryValueEx(kdst, name)
+        except OSError:
+            pass
+        winreg.SetValueEx(kdst, name, 0, winreg.REG_SZ, str(value))
+    try:
+        with winreg.OpenKey(hive_src, subkey_src, 0, winreg.KEY_SET_VALUE) as ksrc:
+            winreg.DeleteValue(ksrc, name)
+    except OSError:
+        with winreg.OpenKey(hive_dst, subkey_dst, 0, winreg.KEY_SET_VALUE) as kdst:
+            if prev is not None:
+                winreg.SetValueEx(kdst, name, 0, prev_type, prev)
+            else:
+                try:
+                    winreg.DeleteValue(kdst, name)
+                except OSError:
+                    pass
+        raise
+
+
+def is_runonce_entry(entry: dict) -> bool:
+    """True when the entry lives in a RunOnce key (execution-once semantics).
+
+    RunOnce entries are meant to run exactly once and then Windows deletes
+    them. Disabling them may prevent a one-time task (installer finish,
+    first-run setup) from ever executing."""
+    subkey = entry.get("subkey", "")
+    return "RunOnce" in subkey
+
+
 def set_startup(entry, enable):
     """Enable/disable a startup entry. Returns (ok, msg).
 
-    Registry toggling is a two-step move (write to the target key, delete
-    from the source one); it is not transactional -- a failure mid-way can
-    leave the value on both keys, which get_disabled_startup filters out
-    on the next read."""
+    Registry toggling moves the value between the active key and its
+    *Disabled counterpart through _reg_transfer, which rolls the
+    destination back if the source deletion fails: the entry is never
+    left duplicated on both keys. Run and RunOnce keys are both handled
+    through the same atomic move.
+
+    RunOnce entries (P1-11) are flagged in the message so the UI can
+    show a stronger warning before disabling them."""
     try:
         if entry["type"] == "reg":
             hive, subkey = entry["hive"], entry["subkey"]
@@ -136,22 +182,16 @@ def set_startup(entry, enable):
                 value = _read_reg_value(d_hive, d_subkey, entry["name"])
                 if value is None:
                     return False, "the disabled entry was not found"
-                with winreg.CreateKey(hive, subkey) as k:
-                    winreg.SetValueEx(k, entry["name"], 0, winreg.REG_SZ, str(value))
-                with winreg.OpenKey(d_hive, d_subkey, 0, winreg.KEY_SET_VALUE) as k:
-                    try:
-                        winreg.DeleteValue(k, entry["name"])
-                    except OSError:
-                        pass
+                _reg_transfer(d_hive, d_subkey, hive, subkey, entry["name"], value)
             else:
                 value = _read_reg_value(hive, subkey, entry["name"])
                 if value is None:
                     return False, "the entry no longer exists"
-                d_hive, d_subkey = RUN_KEY_TO_DISABLED.get((hive, subkey))
-                with winreg.CreateKey(d_hive, d_subkey) as k:
-                    winreg.SetValueEx(k, entry["name"], 0, winreg.REG_SZ, str(value))
-                with winreg.OpenKey(hive, subkey, 0, winreg.KEY_SET_VALUE) as k:
-                    winreg.DeleteValue(k, entry["name"])
+                d_hive, d_subkey = RUN_KEY_TO_DISABLED.get((hive, subkey), (hive, subkey))
+                _reg_transfer(hive, subkey, d_hive, d_subkey, entry["name"], value)
+            # Flag RunOnce entries so the UI can show a warning
+            if is_runonce_entry(entry):
+                return True, "OK (RunOnce)"
             return True, "OK"
         else:
             # Folder entry: rename with a .disabled extension.
@@ -167,6 +207,6 @@ def set_startup(entry, enable):
                 if not os.path.exists(src):
                     return False, "the file no longer exists"
                 os.rename(src, src + ".disabled")
-            return True, "OK"
+            return True, "OK (file)"
     except Exception as e:
         return False, str(e)

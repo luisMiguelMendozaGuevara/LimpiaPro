@@ -15,21 +15,21 @@ Entry point: main() re-elevates through ShellExecuteW when not admin
 import ctypes
 import json
 import os
+import platform
 import sys
 import threading
+import time
+import tkinter.ttk as ttk
 import traceback
-import tkinter as tk
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
-from tkinter import filedialog, messagebox
 
 from . import APP_NAME, APP_VERSION
 from .categories import build_categories
 from .i18n import t
+from .paths import get_cache_file
 from .recycle import empty_recycle_bin, recycle_bin_size
-from .utils import _errlog, app_dir, format_size, is_admin
-from .winapp2 import default_winapp_file, parse_winapp_rules
-from .winstyle import apply_mica_backdrop, fluent_font, get_system_accent
 from .ui.clean_page import CleanPage
 from .ui.duplicates_page import DuplicatePage
 from .ui.log_page import LogPage
@@ -38,12 +38,28 @@ from .ui.theme import ACCENT_FALLBACK
 from .ui.uninstall_page import UninstallPage
 from .ui.update_page import UpdatePage
 from .ui.widgets import post_ui, readonly_toplevel, run_async, start_ui_poller
+from .utils import _errlog, format_size, is_admin
+from .winapp2 import invalidate_detect_cache, parse_winapp_rules
+from .winstyle import apply_mica_backdrop, fluent_font, get_system_accent
 
 
 class CleanerApp(ctk.CTk):
     """Application window: sidebar navigation, pages and global state."""
 
-    CACHE_FILE = os.path.join(app_dir(), "limpiador_cache.json")
+    CACHE_FILE = get_cache_file()
+    # Cache format version: bump when the schema changes so stale cached
+    # results from an older build are ignored instead of misapplied.
+    CACHE_SCHEMA = 1
+
+    # Widgets and state created lazily in _build_sidebar: declared here so
+    # the type checker (and IDE) know the attributes exist before use.
+    theme_mode: ctk.StringVar
+    theme_switch: ctk.CTkSwitch | None = None
+    _theme_animating: bool
+    _theme_target: str | None
+    sidebar: ctk.CTkFrame
+    content: ctk.CTkFrame
+    nav_buttons: dict
 
     def __init__(self):
         super().__init__()
@@ -65,6 +81,8 @@ class CleanerApp(ctk.CTk):
         self.categories = build_categories()
         self.scanner = None
         self.busy = False
+        # Cooperative cancellation for long scans/cleans (P1-13).
+        self.cancel_requested = False
 
         # Resize debounce: avoid one repaint per <Configure> event.
         self._resize_job = None
@@ -80,13 +98,13 @@ class CleanerApp(ctk.CTk):
         start_ui_poller(self)
         self.after(300, self.analyze_all)
 
-    def report_callback_exception(self, exc, val, tb):
+    def report_callback_exception(self, exc, val, tb):  # type: ignore[reportIncompatibleMethodOverride]
         """Route Tk callback exceptions to the error log."""
         _errlog("CALLBACK EXCEPTION: " + "".join(traceback.format_exception(exc, val, tb)))
         try:
             super().report_callback_exception(exc, val, tb)
         except Exception:
-            pass
+            pass  # nosec B110 - fallback must never crash the UI thread
 
     def _on_close(self):
         """WM_DELETE_WINDOW handler: destroy the window."""
@@ -189,7 +207,10 @@ class CleanerApp(ctk.CTk):
     def _finish_theme(self):
         """Restore the switch label and fade back in."""
         m = self.theme_mode.get()
-        self.theme_switch.configure(
+        switch = self.theme_switch
+        if switch is None:
+            return
+        switch.configure(
             text=t("theme.dark") if m == "dark" else t("theme.light"),
             state="normal")
         self._fade_to(1.0)
@@ -211,7 +232,7 @@ class CleanerApp(ctk.CTk):
     def _restyle_tree(self):
         """Apply theme colors to the trees (ttk does not follow the
         customtkinter light/dark mode by itself)."""
-        style = tk.ttk.Style()
+        style = ttk.Style()
         dark = ctk.get_appearance_mode().lower() == "dark"
         bg = "#1c1c1e" if dark else "#f5f5f5"
         fg = "white" if dark else "black"
@@ -224,7 +245,7 @@ class CleanerApp(ctk.CTk):
                             relief="flat", font=("Segoe UI", 10, "bold"))
             style.map("Dup.Treeview", background=[("selected", "#2e7d32")])
         except Exception:
-            pass
+            pass  # nosec B110 - theme styling is best-effort
 
     def _get_page(self, key):
         """Return the page for `key`, constructing it lazily on first use
@@ -306,34 +327,57 @@ class CleanerApp(ctk.CTk):
     # ------------------------------------------------------------------ analyze
 
     def _load_cache(self):
-        """Load the last scan results cache ({} when missing/corrupt)."""
+        """Load the last scan results cache ({} when missing, corrupt or
+        written by a different schema/app version)."""
         try:
-            with open(self.CACHE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+            with open(self.CACHE_FILE, encoding="utf-8") as f:
+                raw = json.load(f)
         except Exception:
             return {}
+        if not isinstance(raw, dict):
+            return {}
+        if raw.get("schema") != self.CACHE_SCHEMA:
+            return {}
+        if raw.get("app_version") != APP_VERSION:
+            return {}
+        data = raw.get("data")
+        return data if isinstance(data, dict) else {}
 
     def _save_cache(self):
-        """Persist per-category size/files to disk (atomic tmp+replace)."""
+        """Persist per-category size/files to disk (atomic tmp+replace)
+        with schema/app provenance metadata so stale caches are never
+        mistaken for fresh ones."""
         data = {c.key: {"size": c.size, "files": c.files} for c in self.categories}
+        payload = {
+            "schema": self.CACHE_SCHEMA,
+            "app_version": APP_VERSION,
+            "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "platform": platform.platform(),
+            "data": data,
+        }
         try:
             tmp = self.CACHE_FILE + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
+                json.dump(payload, f, ensure_ascii=False)
             os.replace(tmp, self.CACHE_FILE)
         except Exception:
-            pass
+            pass  # nosec B110 - cache write is best-effort
 
     def analyze_all(self):
         """Kick off a full system analysis on a background coordinator
         thread (cached results are shown immediately first)."""
         if self.busy:
             return
+        self.cancel_requested = False
         # Show cached results immediately (instant startup).
         self._apply_cache()
         self.set_busy(True)
         self.set_status(t("status.analyzing"))
         threading.Thread(target=self._analyze_worker, daemon=True).start()
+
+    def request_cancel(self):
+        """Ask the running analyzer/cleaner to stop as soon as possible."""
+        self.cancel_requested = True
 
     def load_winapp_rules(self):
         """Ask for a winapp2.ini file and load it on a worker thread."""
@@ -345,6 +389,9 @@ class CleanerApp(ctk.CTk):
             return
         self.set_busy(True, mode="indeterminate")
         self.set_status(t("status.parsing_winapp"))
+        # A different ini may carry different Detect= conditions: the
+        # memoized results from the previous file must not leak in.
+        invalidate_detect_cache()
         run_async(self, self._load_winapp_worker, self._load_winapp_done,
                   (path,), on_error=self._load_winapp_error)
 
@@ -387,13 +434,14 @@ class CleanerApp(ctk.CTk):
 
     def _apply_cache(self):
         """Copy the cached size/files into the category objects (displayed
-        until the fresh scan overwrites them)."""
+        until the fresh scan overwrites them). Entries whose values are not
+        numbers are skipped defensively."""
         cached = self._load_cache()
         for cat in self.categories:
             entry = cached.get(cat.key)
-            if entry:
-                cat.size = entry.get("size", 0)
-                cat.files = entry.get("files", 0)
+            if isinstance(entry, dict) and isinstance(entry.get("size"), (int, float)):
+                cat.size = int(entry.get("size", 0))
+                cat.files = int(entry.get("files", 0))
 
     def _analyze_worker(self):
         """Scan coordinator: one thread per category, then save the cache.
@@ -418,13 +466,21 @@ class CleanerApp(ctk.CTk):
             post_ui(lambda: self._analyze_progress(cat, frac))
 
         threads = []
+
+        def should_cancel():
+            return self.cancel_requested
+
         for cat in self.categories:
             def work(c=cat):
+                if self.cancel_requested:
+                    post_ui(lambda cc=c: self._analyze_one_done(cc))
+                    return
                 if c.recycle_bin:
                     c.size = recycle_bin_size()
                     c.files = 0
                 else:
-                    c.scan(on_progress=lambda n, cc=c: cb(cc, n))
+                    c.scan(on_progress=lambda n, cc=c: cb(cc, n),
+                           should_cancel=should_cancel)
                 post_ui(lambda cc=c: self._analyze_one_done(cc))
             thread = threading.Thread(target=work, daemon=True)
             thread.start()
@@ -432,7 +488,8 @@ class CleanerApp(ctk.CTk):
         for thread in threads:
             thread.join()
 
-        self._save_cache()
+        if not self.cancel_requested:
+            self._save_cache()
         post_ui(self._analyze_all_done)
 
     def _analyze_progress(self, cat, frac):
@@ -449,6 +506,11 @@ class CleanerApp(ctk.CTk):
     def _analyze_all_done(self):
         """Finish the analysis: clear busy and update the selected total."""
         self.set_busy(False)
+        if self.cancel_requested:
+            self.set_status(t("status.analyze_cancelled"))
+            self.log(t("log.analyze_cancelled"))
+            self.cancel_requested = False
+            return
         self.set_status(t("status.analysis_done"))
         self.update_total()
         _errlog("analysis complete")
@@ -480,6 +542,7 @@ class CleanerApp(ctk.CTk):
                 detail=detail)
         if not messagebox.askyesno(APP_NAME, msg, icon="warning"):
             return
+        self.cancel_requested = False
         self.set_busy(True, mode="determinate")
         self.pages_clean.progress.set(0)
         self.set_status(t("status.cleaning"))
@@ -494,8 +557,15 @@ class CleanerApp(ctk.CTk):
         total_freed = 0
         target_all = sum(c.size for c in selected)
         cumulative = 0
+
+        def should_cancel():
+            return self.cancel_requested
+
         for cat in selected:
-            self.log(t("log.cleaning_cat", label=cat.label))
+            if self.cancel_requested:
+                break
+            label = cat.label
+            post_ui(lambda lab=label: self.log(t("log.cleaning_cat", label=lab)))
             if cat.recycle_bin:
                 # Measure BEFORE emptying: afterwards there is nothing left
                 # to count. The ok-message comes back in English; the UI
@@ -505,18 +575,27 @@ class CleanerApp(ctk.CTk):
                 if ok:
                     total_freed += bin_size
                 cumulative += cat.size
-                self.log(t("log.recycle_line",
-                           msg=t("msg.recycle_emptied") if ok else msg))
+                post_ui(lambda ok=ok, m=msg: self.log(t(
+                    "log.recycle_line",
+                    msg=t("msg.recycle_emptied") if ok else m)))
                 continue
             removed, errors, freed = cat.clean(
                 target_bytes=cat.size,
                 on_progress=lambda frac, cum=cumulative, tot=target_all:
-                post_ui(lambda: self._clean_progress(cum, tot, frac)))
+                post_ui(lambda: self._clean_progress(cum, tot, frac)),
+                should_cancel=should_cancel)
             cumulative += cat.size
             total_freed += freed
-            self.log(t("log.cat_cleaned", n=removed, e=errors,
-                       size=format_size(freed)))
-        post_ui(lambda: self._clean_done(total_freed))
+            post_ui(lambda r=removed, e=errors, f=freed:
+                    self.log(t("log.cat_cleaned", n=r, e=e,
+                               size=format_size(f))))
+            if errors:
+                summary = cat.error_summary()
+                detail = "".join(
+                    t("log.error_kind", n=n, kind=t("errk." + k))
+                    for k, n in sorted(summary.items()))
+                post_ui(lambda d=detail: self.log(d))
+        post_ui(lambda: self._clean_done(total_freed, self.cancel_requested))
 
     def _clean_progress(self, cum_base, target_all, frac_cat):
         """Map one category's 0..1 progress onto the global bar."""
@@ -524,10 +603,16 @@ class CleanerApp(ctk.CTk):
             value = cum_base / target_all + frac_cat * (target_all - cum_base) / target_all
             self.pages_clean.progress.set(min(value, 1.0))
 
-    def _clean_done(self, total_freed):
-        """Finish the cleanup and trigger a fresh full analysis."""
+    def _clean_done(self, total_freed, cancelled=False):
+        """Finish the cleanup and trigger a fresh full analysis (or, when
+        cancelled, just release busy and report)."""
         self.set_busy(False)
         self.pages_clean.progress.set(1)
+        if cancelled:
+            self.set_status(t("status.clean_cancelled"))
+            self.log(t("log.clean_cancelled"))
+            self.cancel_requested = False
+            return
         self.set_status(t("status.clean_done", size=format_size(total_freed)))
         self.log(t("log.total_freed", size=format_size(total_freed)))
         self.after(300, self.analyze_all)

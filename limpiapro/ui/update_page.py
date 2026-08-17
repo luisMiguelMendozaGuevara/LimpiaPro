@@ -5,9 +5,9 @@ on a worker thread. DISM output arrives in the operating system language
 (out of the app's control) and is appended verbatim to the console box."""
 
 import subprocess
+from tkinter import messagebox
 
 import customtkinter as ctk
-from tkinter import messagebox
 
 from .. import APP_NAME
 from ..i18n import t
@@ -94,7 +94,7 @@ class UpdatePage(ctk.CTkFrame):
         """Run DISM with a 30-minute timeout and return its output.
         Exceptions are converted to text so the console box shows them."""
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603 - fixed binary + arg list, no shell
                 ["dism", "/online", "/cleanup-image"] + args,
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=1800, creationflags=subprocess.CREATE_NO_WINDOW)

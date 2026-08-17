@@ -8,7 +8,6 @@ which is why every thread -> UI hop goes through post_ui."""
 
 import queue
 import threading
-import tkinter as tk
 from tkinter import messagebox, ttk
 
 import customtkinter as ctk
@@ -16,7 +15,6 @@ import customtkinter as ctk
 from .. import APP_NAME
 from ..i18n import t
 from ..utils import _errlog
-
 
 # Thread-safe queue used to run callbacks on the UI thread. A single
 # poller drains it; see start_ui_poller.
@@ -47,7 +45,7 @@ def start_ui_poller(widget, interval=50):
         try:
             widget.after(interval, _poll)
         except Exception:
-            pass
+            pass  # nosec B110 - poll re-arming is best-effort
     widget.after(interval, _poll)
 
 
@@ -67,7 +65,8 @@ def run_async(widget, worker, done, args=(), on_error=None):
                 # Capture `e` as a default argument: the `except` clause
                 # deletes the exception variable when the block ends, and
                 # the lambda scheduled for the UI runs later.
-                post_ui(lambda e=e: on_error(e))
+                handler = on_error
+                post_ui(lambda e=e: handler(e))
             return
         post_ui(lambda: done(*result))
     threading.Thread(target=_thread, daemon=True).start()
@@ -185,4 +184,4 @@ def confirm_destructive(title, details, extra=""):
     """Destructive-action confirmation dialog. Returns True/False."""
     msg = (f"{details}\n\n{extra}\n{t('ui.continue_q')}" if extra
            else f"{details}\n\n{t('ui.continue_q')}")
-    return messagebox.askyesno(APP_NAME, msg, parent=None, icon="warning")
+    return messagebox.askyesno(APP_NAME, msg, icon="warning")

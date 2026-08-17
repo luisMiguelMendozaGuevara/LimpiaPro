@@ -21,6 +21,11 @@ class DuplicateScanner:
         self.min_size = min_size_mb * 1024 * 1024
         self.cancel = False
         self.groups = []
+        self.skipped = 0
+        # path -> (size, mtime_ns) captured when the file was scanned.
+        # Deletion re-validates that the on-disk file still matches, so a
+        # file modified (or replaced) after the scan is not destroyed.
+        self.snapshot = {}
         self._workers = workers
 
     @staticmethod
@@ -58,7 +63,11 @@ class DuplicateScanner:
 
     def _hash_paths(self, paths, hasher, pool):
         """Hash paths in parallel through `pool` (created once per scan).
-        Returns {hash: [paths]} or None when cancelled."""
+        Returns {hash: [paths]} or None when cancelled.
+
+        Paths whose hash is None (unreadable / deleted mid-scan) are not
+        silently dropped: they are counted in self.skipped so the caller
+        can report how many files could not be inspected."""
         results = {}
         fut_to_path = {}
         for p in paths:
@@ -70,7 +79,9 @@ class DuplicateScanner:
                 return None
             p = fut_to_path[fut]
             h = fut.result()
-            if h is not None:
+            if h is None:
+                self.skipped += 1
+            else:
                 results.setdefault(h, []).append(p)
         return results
 
@@ -89,10 +100,15 @@ class DuplicateScanner:
                 return []
             if size >= self.min_size:
                 by_size.setdefault(size, []).append(path)
+                try:
+                    st = os.stat(path)
+                    self.snapshot[path] = (st.st_size, st.st_mtime_ns)
+                except OSError:
+                    self.snapshot[path] = (size, 0)
 
         # One pool reused across all phases and groups.
         with ThreadPoolExecutor(max_workers=self._workers) as pool:
-            for size, paths in by_size.items():
+            for _size, paths in by_size.items():
                 if self.cancel:
                     break
                 if len(paths) < 2:
@@ -108,7 +124,7 @@ class DuplicateScanner:
                 full = self._hash_paths(cands, self._full_hash, pool)
                 if full is None:
                     break
-                for h, group in full.items():
+                for _h, group in full.items():
                     if len(group) > 1:
                         self.groups.append(group)
         return self.groups

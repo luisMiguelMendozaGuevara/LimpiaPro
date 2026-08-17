@@ -229,7 +229,6 @@ class _FakeKey:
 
 def test_detect_true_memoizes_registry_queries(monkeypatch):
     """The same condition queried twice must touch the registry once."""
-    import winreg
     calls = []
 
     def fake_open(*_a):
@@ -244,7 +243,6 @@ def test_detect_true_memoizes_registry_queries(monkeypatch):
 
 
 def test_detect_true_distinct_conditions_do_not_share_cache(monkeypatch):
-    import winreg
 
     def fake_open(*_a):
         raise OSError("does not exist")
@@ -277,7 +275,7 @@ def test_real_ini_smoke():
     path = winapp2.default_winapp_file()
     if not os.path.exists(path):
         pytest.skip("winapp2.ini not present")
-    with open(path, "r", encoding="utf-8-sig", errors="replace") as f:
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
         sections = parse_sections(f.read())
     assert len(sections) > 3000
     for s in sections[:50]:

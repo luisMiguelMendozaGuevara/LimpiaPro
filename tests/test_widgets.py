@@ -3,7 +3,6 @@
 No window is created; _UI_QUEUE is drained manually (or post_ui is
 monkeypatched) to isolate the callback-scheduling logic."""
 
-import threading
 import time
 
 import pytest

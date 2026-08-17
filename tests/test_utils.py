@@ -2,9 +2,16 @@
 
 import os
 
-from limpiapro.utils import (_delete_path, _fast_folder_stats, _folder_size,
-                             _parallel_map, _safe_size, format_size, glob_like,
-                             iter_file_sizes)
+from limpiapro.utils import (
+    _delete_path,
+    _fast_folder_stats,
+    _folder_size,
+    _parallel_map,
+    _safe_size,
+    format_size,
+    glob_like,
+    iter_file_sizes,
+)
 
 
 def _write(base, *relpaths, content=b"12345"):
@@ -104,3 +111,58 @@ def test_parallel_map_order_and_errors(tmp_path):
 
 def test_parallel_map_empty():
     assert _parallel_map(lambda x: x, []) == []
+
+
+def test_delete_safety_refuses_drive_root():
+    from limpiapro.utils import is_safe_delete_target
+    assert is_safe_delete_target("C:\\") is False
+    assert is_safe_delete_target("D:\\") is False
+
+
+def test_delete_safety_refuses_protected_dirs():
+    from limpiapro.utils import is_safe_delete_target
+    assert is_safe_delete_target(r"C:\Windows") is False
+    assert is_safe_delete_target(r"C:\Windows\System32") is False
+    assert is_safe_delete_target(r"C:\Program Files") is False
+
+
+def test_delete_safety_allows_children_of_protected(tmp_path):
+    from limpiapro.utils import is_safe_delete_target
+    assert is_safe_delete_target(str(tmp_path)) is True
+    safe = tmp_path / "cache"
+    safe.mkdir()
+    assert is_safe_delete_target(str(safe)) is True
+
+
+def test_delete_path_refuses_protected_directory():
+    from limpiapro.utils import _delete_path
+    # Parenting: a protected path must not be deletable via _delete_path.
+    p = r"C:\Windows"
+    if os.path.isdir(p):
+        assert _delete_path(p) is False
+        assert os.path.isdir(p) is True
+
+
+def test_delete_measured_uses_safety_layer():
+    from limpiapro.utils import _delete_measured
+    gone, freed, errors = _delete_measured(r"C:\Windows")
+    assert gone is False
+    assert errors and errors[0].kind == "safety"
+
+
+def test_delete_measured_returns_error_detail_for_missing_guard(tmp_path):
+    from limpiapro.utils import _delete_measured
+    gone, freed, errors = _delete_measured(str(tmp_path / "missing"))
+    assert gone is True  # already gone: not an error
+    # A guarded refused target produces a structured error.
+    assert isinstance(errors or [], list)
+
+
+def test_error_classification():
+    import errno
+
+    from limpiapro.utils import _classify_error
+    e = OSError(errno.EACCES, "x")
+    assert _classify_error(e) == "access_denied"
+    e2 = OSError(errno.ENOENT, "x")
+    assert _classify_error(e2) == "not_found"

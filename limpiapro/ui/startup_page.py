@@ -12,12 +12,21 @@ import customtkinter as ctk
 
 from .. import APP_NAME
 from ..i18n import t
-from ..processes import get_processes, kill_process
-from ..startup import (get_disabled_startup, get_startup_apps, set_startup)
+from ..processes import get_processes, is_protected, kill_process
+from ..startup import get_disabled_startup, get_startup_apps, is_runonce_entry, set_startup
 from ..tasks import get_scheduled_tasks, set_task_enabled
 from ..winstyle import IconCache
-from .theme import (GREEN, GREEN_HOVER, GREEN_TEXT, MUTED, ORANGE,
-                    ORANGE_HOVER, RED, RED_HOVER, page_header)
+from .theme import (
+    GREEN,
+    GREEN_HOVER,
+    GREEN_TEXT,
+    MUTED,
+    ORANGE,
+    ORANGE_HOVER,
+    RED,
+    RED_HOVER,
+    page_header,
+)
 from .widgets import fill_tree, make_tree, run_async, selected_many, selected_one
 
 
@@ -116,13 +125,28 @@ class StartupPage(ctk.CTkFrame):
         self.app.log(t("log.startup_loaded", n=len(self.startup_data)))
 
     def disable_startup_selected(self):
-        """Confirm and disable the selected startup app on a worker."""
+        """Confirm and disable the selected startup app on a worker.
+        
+        RunOnce entries (P1-11) get a stronger warning because disabling
+        them may prevent a one-time task from ever executing."""
         entry = selected_one(self.startup_tree, self.startup_data)
         if entry is None:
             return
-        if not messagebox.askyesno(
-                APP_NAME, t("msg.disable_startup", name=entry["name"])):
-            return
+        
+        # Show stronger warning for RunOnce entries
+        if is_runonce_entry(entry):
+            msg = (
+                f"⚠ ADVERTENCIA: Esta es una entrada de ejecución única (RunOnce).\n\n"
+                f"Si la desactivas, puede que nunca se ejecute.\n\n"
+                f"¿Estás seguro de que quieres desactivar '{entry['name']}'?"
+            )
+            if not messagebox.askyesno(APP_NAME, msg, icon="warning"):
+                return
+        else:
+            if not messagebox.askyesno(
+                    APP_NAME, t("msg.disable_startup", name=entry["name"])):
+                return
+        
         self.app.set_busy(True, mode="indeterminate")
         run_async(self.app, self._disable_startup_worker,
                   self._disable_startup_done, (entry,))
@@ -387,6 +411,9 @@ class StartupPage(ctk.CTkFrame):
             return
         pid = sel[0]
         name = self.proc_tree.item(pid, "text")
+        if is_protected(name):
+            messagebox.showinfo(APP_NAME, t("msg.process_protected", name=name))
+            return
         if not messagebox.askyesno(
                 APP_NAME, t("msg.kill_process", name=name, pid=pid)):
             return
@@ -395,7 +422,7 @@ class StartupPage(ctk.CTkFrame):
 
     def _kill_worker(self, pid, name):
         """Force-end one process via taskkill. Returns (ok, msg, name)."""
-        ok, msg = kill_process(pid)
+        ok, msg = kill_process(pid, name=name)
         return ok, msg, name
 
     def _kill_done(self, ok, msg, name):

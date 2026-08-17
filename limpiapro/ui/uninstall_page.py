@@ -12,8 +12,7 @@ import customtkinter as ctk
 
 from .. import APP_NAME
 from ..i18n import t
-from ..uninstall import (delete_registry_path, find_leftovers,
-                         get_installed_apps, launch_uninstaller)
+from ..uninstall import delete_registry_path, find_leftovers, get_installed_apps, launch_uninstaller
 from ..utils import _delete_path, format_size
 from .theme import MUTED, ORANGE, ORANGE_HOVER, RED, RED_HOVER, page_header
 from .widgets import fill_tree, make_tree, readonly_toplevel, run_async, selected_one

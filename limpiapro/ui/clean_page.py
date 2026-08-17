@@ -9,7 +9,7 @@ import customtkinter as ctk
 from ..i18n import t
 from ..utils import format_size
 from ..winstyle import fluent_font
-from .theme import GREEN_TEXT, MUTED, ACCENT_FALLBACK, page_header
+from .theme import ACCENT_FALLBACK, GREEN_TEXT, MUTED, page_header
 
 
 class CleanPage(ctk.CTkFrame):
@@ -40,6 +40,10 @@ class CleanPage(ctk.CTkFrame):
                                        fg_color=accent, hover_color=accent,
                                        command=self.app.confirm_clean)
         self.clean_btn.pack(side="right")
+        self.cancel_btn = ctk.CTkButton(self.toolbar, text=t("btn.cancel"), width=100,
+                                        command=self.app.request_cancel)
+        self.cancel_btn.pack(side="right", padx=6)
+        self.cancel_btn.configure(state="disabled")
 
         self.list_frame = ctk.CTkScrollableFrame(self, fg_color=("gray92", "#1c1c1e"))
         self.list_frame.pack(fill="both", expand=True, padx=16, pady=6)
@@ -121,5 +125,7 @@ class CleanPage(ctk.CTkFrame):
                 text=t("clean.n_files", n=f"{cat.files:,}") if cat.files else "")
 
     def on_busy(self, busy):
-        """Disable the clean button while any background operation runs."""
+        """Disable the clean button while any background operation runs;
+        enable the cancel button so the busy operation can be stopped."""
         self.clean_btn.configure(state="disabled" if busy else "normal")
+        self.cancel_btn.configure(state="normal" if busy else "disabled")

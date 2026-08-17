@@ -115,10 +115,22 @@ python -m pytest tests/ -v
 
 Known limitations, tracked to fix in future iterations:
 
-- **CI / tooling** — the CI workflow only runs pytest on `windows-latest`. No linter, type checker (mypy/pyright) or automated executable build is wired up yet.
-- **UI layer typing** — the core package (`limpiapro/`, `ui/widgets.py`, `ui/theme.py`) is typed; the UI pages still rely mostly on runtime attribute access without static annotations.
 - **UI tests** — `tests/` cover the core logic, the winapp2 parser and the `run_async`/`post_ui` contract, but there are no end-to-end tests driving a real Tk window.
-- **Startup manager mutation** — toggling a startup entry is not transactional: if one registry key fails mid-way, the earlier ones are already applied and are not rolled back.
+- **i18n dynamic refresh** — the language is fixed at import time; changing Windows language requires restarting the app.
+- **CleanerApp refactor** — `app.py` still contains significant orchestration logic; further separation into services would improve testability.
+
+### Recent improvements
+
+- **Structured audit logging (P1-16)** — All operations (cleanup, scan, preview) are now logged to `%LOCALAPPDATA%/LimpiaPro/logs/audit.jsonl` in JSONL format for diagnostics and error pattern analysis.
+- **RunOnce protection (P1-11)** — Startup entries in `RunOnce` keys now show a stronger warning before being disabled, since they are meant to execute exactly once.
+- **Complete CI/CD pipeline (P2-22, P2-23)** — GitHub Actions now includes linting (Ruff), type checking (Pyright), security scanning (Bandit), PyInstaller build, and smoke testing of the executable.
+- **Centralized delete safety layer (P0-2)** — All destructive operations pass through `is_safe_delete_target()` which protects system directories, user profiles, and drive roots.
+- **Snapshot-based cleanup (P0-3)** — The preview step creates an immutable snapshot of targets, ensuring cleanup deletes exactly what was shown to the user.
+- **Detailed error reporting (P0-5)** — Deletion failures are classified by type (in_use, access_denied, not_found, etc.) and reported to the UI.
+- **Process protection (P1-9)** — Critical system processes (explorer.exe, dwm.exe, etc.) cannot be killed through the UI.
+- **Transactional startup management (P1-10)** — Registry operations for enabling/disabling startup entries now include rollback on failure.
+- **Duplicate file validation (P1-14)** — Before deletion, duplicate files are revalidated (size + mtime) to ensure they haven't changed since the scan.
+- **User-specific data storage (P2-24)** — Cache and logs are stored in `%LOCALAPPDATA%/LimpiaPro/` instead of the application directory, avoiding permission issues and multi-user conflicts.
 
 ### Project structure
 

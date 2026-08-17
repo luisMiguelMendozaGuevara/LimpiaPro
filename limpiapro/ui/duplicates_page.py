@@ -2,9 +2,9 @@
 
 Drives DuplicateScanner on a worker thread: the user picks a folder and a
 minimum size, results are shown as tree groups (one "original" plus its
-copies) and the selected copies get deleted after confirmation. The tree
-item text *is* the file path, which is how deletion maps rows back to
-files (_tree_path)."""
+copies) and the selected copies get deleted after confirmation. Each item
+carries an explicit stable iid; _item_path maps the file rows back to their
+paths so deletion never relies on the displayed tree text."""
 
 import os
 from tkinter import filedialog, messagebox
@@ -48,6 +48,10 @@ class DuplicatePage(ctk.CTkFrame):
         self.info = ctk.CTkLabel(self, text="", text_color=MUTED)
         self.info.pack(anchor="w", padx=16)
 
+        # iid -> file path for the duplicate copy rows (group headers and
+        # the "original" placeholder row have no path).
+        self._item_path = {}
+
         self.tree_frame = ctk.CTkFrame(self, fg_color=("gray92", "#1c1c1e"))
         self.tree_frame.pack(fill="both", expand=True, padx=16, pady=8)
         self.tree = make_tree(
@@ -84,16 +88,11 @@ class DuplicatePage(ctk.CTkFrame):
     def _tree_path(self, item_id):
         """File path of a tree item, or None.
 
-        Group headers and the "(original, kept)" placeholder are filtered
-        out; only real child items carry a path (the item text IS the
-        path, so paths containing '(' at the start or ')' at the end would
-        be skipped)."""
-        label = self.tree.item(item_id, "text")
-        if not label or label.startswith("(") or label.endswith(")"):
-            return None
-        if self.tree.parent(item_id) == "":
-            return None  # a group node, not a file
-        return label
+        Looks the iid up in _item_path; rows without an entry (group
+        headers, the "(original, kept)" placeholder) return None. The tree
+        text is never parsed, so paths containing '(' or ')' are found
+        reliably."""
+        return self._item_path.get(item_id)
 
     def start_scan(self):
         """Validate input and launch the scan on a worker thread."""
@@ -108,6 +107,7 @@ class DuplicatePage(ctk.CTkFrame):
         self.app.set_busy(True, mode="indeterminate")
         self.app.scanner = DuplicateScanner(folder, min_mb)
         self.tree.delete(*self.tree.get_children())
+        self._item_path = {}
         self.summary.configure(text=t("label.scanning"))
         self.info.configure(text="")
         self._scan_folder = folder
@@ -147,8 +147,13 @@ class DuplicatePage(ctk.CTkFrame):
         wasted = sum(_safe_size(g[0]) * (len(g) - 1) for g in groups)
         self.summary.configure(
             text=t("dupes.summary", n=len(groups), size=format_size(wasted)))
-        self.info.configure(text=t("dupes.results_of", folder=self.folder_path.get()))
+        info = t("dupes.results_of", folder=self.folder_path.get())
+        skipped = getattr(self.app.scanner, "skipped", 0)
+        if skipped:
+            info += " " + t("dupes.unreadable", n=skipped)
+        self.info.configure(text=info)
         specs = []
+        iid_n = 0
         for gi, group in enumerate(groups):
             gid = f"g{gi}"
             head = t("dupes.group_head",
@@ -157,7 +162,10 @@ class DuplicatePage(ctk.CTkFrame):
             specs.append((gid, "", head, (str(len(group)), ""), {"open": False}))
             specs.append(("", gid, t("dupes.original"), ("", ""), {}))
             for dup in group[1:]:
-                specs.append(("", gid, dup, ("", ""), {}))
+                pid = f"p{iid_n}"
+                iid_n += 1
+                self._item_path[pid] = dup
+                specs.append((pid, gid, dup, ("", ""), {}))
         fill_tree(self.tree, specs)
         self.app.set_status(t("status.dupes_done", n=len(groups)))
         self.app.log(t("log.dupes_done", folder=self.folder_path.get(),
@@ -179,26 +187,46 @@ class DuplicatePage(ctk.CTkFrame):
         if not messagebox.askyesno(APP_NAME, msg, icon="warning"):
             return
         self.app.set_busy(True, mode="indeterminate")
-        run_async(self.app, self._delete_worker, self._delete_done, (paths,))
+        # Frozen copy of the scan snapshot: re-validate each file against
+        # it before deleting (a file that changed since the scan must not
+        # be destroyed just because it shares a name/group).
+        snapshot = dict(getattr(self.app.scanner, "snapshot", {}))
+        run_async(self.app, self._delete_worker, self._delete_done,
+                  (paths, snapshot))
 
-    def _delete_worker(self, paths):
-        """Delete the given paths (checking existence first because the
-        scan may be older than the disk). Returns (removed, errors)."""
+    def _delete_worker(self, paths, snapshot):
+        """Delete the given paths, re-validating each one against the scan
+        snapshot (size + mtime) so files modified after the scan are left
+        alone. Returns (removed, errors, changed)."""
         removed = 0
         errors = 0
+        changed = 0
         for p in paths:
-            if os.path.exists(p):
-                if _delete_path(p):
-                    removed += 1
-                else:
-                    errors += 1
-        return removed, errors
+            if not os.path.exists(p):
+                continue
+            snap = snapshot.get(p)
+            if snap is not None:
+                try:
+                    st = os.stat(p)
+                    if (st.st_size, st.st_mtime_ns) != snap:
+                        changed += 1
+                        continue
+                except OSError:
+                    changed += 1
+                    continue
+            if _delete_path(p):
+                removed += 1
+            else:
+                errors += 1
+        return removed, errors, changed
 
-    def _delete_done(self, removed, errors):
+    def _delete_done(self, removed, errors, changed):
         """Report the result and prune the deleted rows from the tree."""
         self.app.set_busy(False)
         self.app.set_status(t("status.dupes_deleted", n=removed, e=errors))
         self.app.log(t("log.dupes_deleted", n=removed, e=errors))
+        if changed:
+            self.app.log(t("log.dupes_changed", n=changed))
         # Remove the deleted items from the tree.
         for item_id in self.tree.get_children():
             for child in self.tree.get_children(item_id):
