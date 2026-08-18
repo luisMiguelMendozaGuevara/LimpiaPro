@@ -17,24 +17,20 @@ Uso:
 El script debe ejecutarse desde el directorio raíz del proyecto.
 """
 
+import datetime
 import os
-import sys
-import time
-import json
 import shutil
 import subprocess
-import datetime
-import struct
+import sys
+import time
 from pathlib import Path
-from typing import Optional
-
 
 # ---------------------------------------------------------------------------
 # Configuración
 # ---------------------------------------------------------------------------
 
 APP_NAME = "LimpiaPro"
-VERSION = "2.2"
+VERSION = "2.3"
 PROJECT_ROOT = Path(__file__).parent.resolve()
 DIST_DIR = PROJECT_ROOT / "dist"
 ICON_PATH = PROJECT_ROOT / "assets" / "limpiadora.ico"
@@ -60,7 +56,7 @@ def _detect_python():
     return PYTHON_CMD
 
 
-def _run(cmd: str, *, cwd: Optional[Path] = None, check: bool = True,
+def _run(cmd: str, *, cwd: Path | None = None, check: bool = True,
          capture: bool = False) -> subprocess.CompletedProcess:
     print(f"  > {cmd}")
     return subprocess.run(
@@ -93,7 +89,6 @@ def git_commit_and_tag() -> str:
     else:
         print(f"  Cambios detectados:\n{status}")
         _run("git add -A")
-        tag_msg = f"v{VERSION}: Capa de seguridad, audit logging, CI/CD completo, RunOnce"
         commit_msg = (
             f"release v{VERSION}: auditoría completa aplicada\n\n"
             "Resumen de cambios:\n"
@@ -189,7 +184,7 @@ def build_executables():
 # ---------------------------------------------------------------------------
 
 def create_shortcut(target: Path, shortcut_path: Path,
-                    icon_path: Optional[Path] = None,
+                    icon_path: Path | None = None,
                     description: str = ""):
     """
     Crea un acceso directo de Windows (.lnk) usando PowerShell.
@@ -238,7 +233,7 @@ def update_desktop_shortcut():
         desktop = Path(os.environ.get("ONEDRIVE", "")) / "Desktop"
 
     if not desktop.exists():
-        print(f"  ERROR: No se pudo encontrar el escritorio del usuario.")
+        print("  ERROR: No se pudo encontrar el escritorio del usuario.")
         sys.exit(1)
 
     shortcut_path = desktop / f"{APP_NAME}.lnk"

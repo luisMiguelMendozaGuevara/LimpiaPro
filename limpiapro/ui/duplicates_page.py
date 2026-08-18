@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from .. import APP_NAME
+from ..contracts import CleanerAppProtocol
 from ..duplicates import DuplicateScanner
 from ..i18n import t
 from ..utils import _delete_path, _safe_size, format_size
@@ -22,7 +23,7 @@ from .widgets import fill_tree, make_tree, run_async
 class DuplicatePage(ctk.CTkFrame):
     """Duplicate file scanner page: folder picker, scan and delete."""
 
-    def __init__(self, master, app):
+    def __init__(self, master, app: CleanerAppProtocol):
         super().__init__(master, fg_color="transparent")
         self.app = app
 
@@ -31,18 +32,28 @@ class DuplicatePage(ctk.CTkFrame):
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.pack(fill="x", padx=16, pady=10)
         self.folder_path = ctk.StringVar(value="")
-        ctk.CTkButton(bar, text=t("btn.choose_folder"), width=130,
-                      command=self.choose_folder).pack(side="left")
-        ctk.CTkEntry(bar, textvariable=self.folder_path,
-                     placeholder_text=t("dupes.path_placeholder"),
-                     state="readonly").pack(side="left", fill="x", expand=True, padx=8)
+        ctk.CTkButton(bar, text=t("btn.choose_folder"), width=130, command=self.choose_folder).pack(
+            side="left"
+        )
+        ctk.CTkEntry(
+            bar,
+            textvariable=self.folder_path,
+            placeholder_text=t("dupes.path_placeholder"),
+            state="readonly",
+        ).pack(side="left", fill="x", expand=True, padx=8)
         self.min_size = ctk.StringVar(value="2 MB")
         ctk.CTkLabel(bar, text=t("dupes.min_size")).pack(side="left")
-        ctk.CTkOptionMenu(bar, values=["1 MB", "2 MB", "5 MB", "10 MB", "50 MB"],
-                          variable=self.min_size, width=90).pack(side="left", padx=6)
-        self.scan_btn = ctk.CTkButton(bar, text=t("btn.find_dupes"), width=140,
-                                      fg_color=GREEN,
-                                      hover_color=GREEN_HOVER, command=self.start_scan)
+        ctk.CTkOptionMenu(
+            bar, values=["1 MB", "2 MB", "5 MB", "10 MB", "50 MB"], variable=self.min_size, width=90
+        ).pack(side="left", padx=6)
+        self.scan_btn = ctk.CTkButton(
+            bar,
+            text=t("btn.find_dupes"),
+            width=140,
+            fg_color=GREEN,
+            hover_color=GREEN_HOVER,
+            command=self.start_scan,
+        )
         self.scan_btn.pack(side="left", padx=6)
 
         self.info = ctk.CTkLabel(self, text="", text_color=MUTED)
@@ -56,21 +67,32 @@ class DuplicatePage(ctk.CTkFrame):
         self.tree_frame.pack(fill="both", expand=True, padx=16, pady=8)
         self.tree = make_tree(
             self.tree_frame,
-            [("#0", t("col.file_group"), 560), ("dup", t("col.copies"), 70, "center"),
-             ("size", t("col.size"), 90, "e")])
+            [
+                ("#0", t("col.file_group"), 560),
+                ("dup", t("col.copies"), 70, "center"),
+                ("size", t("col.size"), 90, "e"),
+            ],
+        )
 
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.pack(fill="x", padx=16, pady=(4, 10))
         sel_help = ctk.CTkLabel(
-            bottom, text=t("dupes.help", btn=t("btn.delete_selected")),
-            font=ctk.CTkFont(size=11), text_color=MUTED)
+            bottom,
+            text=t("dupes.help", btn=t("btn.delete_selected")),
+            font=ctk.CTkFont(size=11),
+            text_color=MUTED,
+        )
         sel_help.pack(side="left")
-        self.summary = ctk.CTkLabel(bottom, text="",
-                                    font=ctk.CTkFont(size=12, weight="bold"))
+        self.summary = ctk.CTkLabel(bottom, text="", font=ctk.CTkFont(size=12, weight="bold"))
         self.summary.pack(side="left", padx=12)
-        self.delete_btn = ctk.CTkButton(bottom, text=t("btn.delete_selected"), width=180,
-                                        fg_color=RED, hover_color=RED_HOVER,
-                                        command=self.delete_selected)
+        self.delete_btn = ctk.CTkButton(
+            bottom,
+            text=t("btn.delete_selected"),
+            width=180,
+            fg_color=RED,
+            hover_color=RED_HOVER,
+            command=self.delete_selected,
+        )
         self.delete_btn.pack(side="right")
 
     def on_busy(self, busy):
@@ -111,8 +133,7 @@ class DuplicatePage(ctk.CTkFrame):
         self.summary.configure(text=t("label.scanning"))
         self.info.configure(text="")
         self._scan_folder = folder
-        run_async(self.app, self._scan_worker, self._done, (folder,),
-                  on_error=self._scan_error)
+        run_async(self.app, self._scan_worker, self._done, (folder,), on_error=self._scan_error)
 
     def _scan_worker(self, folder):
         """Run the scanner phases (size -> prehash -> full hash).
@@ -145,8 +166,7 @@ class DuplicatePage(ctk.CTkFrame):
             return
         dup_count = sum(len(g) - 1 for g in groups)
         wasted = sum(_safe_size(g[0]) * (len(g) - 1) for g in groups)
-        self.summary.configure(
-            text=t("dupes.summary", n=len(groups), size=format_size(wasted)))
+        self.summary.configure(text=t("dupes.summary", n=len(groups), size=format_size(wasted)))
         info = t("dupes.results_of", folder=self.folder_path.get())
         skipped = getattr(self.app.scanner, "skipped", 0)
         if skipped:
@@ -156,9 +176,11 @@ class DuplicatePage(ctk.CTkFrame):
         iid_n = 0
         for gi, group in enumerate(groups):
             gid = f"g{gi}"
-            head = t("dupes.group_head",
-                     name=os.path.basename(group[0]),
-                     size=format_size(_safe_size(group[0])))
+            head = t(
+                "dupes.group_head",
+                name=os.path.basename(group[0]),
+                size=format_size(_safe_size(group[0])),
+            )
             specs.append((gid, "", head, (str(len(group)), ""), {"open": False}))
             specs.append(("", gid, t("dupes.original"), ("", ""), {}))
             for dup in group[1:]:
@@ -168,8 +190,15 @@ class DuplicatePage(ctk.CTkFrame):
                 specs.append((pid, gid, dup, ("", ""), {}))
         fill_tree(self.tree, specs)
         self.app.set_status(t("status.dupes_done", n=len(groups)))
-        self.app.log(t("log.dupes_done", folder=self.folder_path.get(),
-                       n=len(groups), m=dup_count, size=format_size(wasted)))
+        self.app.log(
+            t(
+                "log.dupes_done",
+                folder=self.folder_path.get(),
+                n=len(groups),
+                m=dup_count,
+                size=format_size(wasted),
+            )
+        )
 
     def delete_selected(self):
         """Confirm and delete the selected duplicate copies on a worker."""
@@ -181,9 +210,12 @@ class DuplicatePage(ctk.CTkFrame):
         msg = t("msg.delete_files_header") + "\n".join(paths[:15])
         if len(paths) > 15:
             msg += "\n" + t("msg.and_n_more", n=len(paths) - 15)
-        msg += ("\n\n" + t("msg.space_to_free",
-                           size=format_size(sum(_safe_size(p) for p in paths)))
-                + "\n\n" + t("ui.continue_q"))
+        msg += (
+            "\n\n"
+            + t("msg.space_to_free", size=format_size(sum(_safe_size(p) for p in paths)))
+            + "\n\n"
+            + t("ui.continue_q")
+        )
         if not messagebox.askyesno(APP_NAME, msg, icon="warning"):
             return
         self.app.set_busy(True, mode="indeterminate")
@@ -191,8 +223,7 @@ class DuplicatePage(ctk.CTkFrame):
         # it before deleting (a file that changed since the scan must not
         # be destroyed just because it shares a name/group).
         snapshot = dict(getattr(self.app.scanner, "snapshot", {}))
-        run_async(self.app, self._delete_worker, self._delete_done,
-                  (paths, snapshot))
+        run_async(self.app, self._delete_worker, self._delete_done, (paths, snapshot))
 
     def _delete_worker(self, paths, snapshot):
         """Delete the given paths, re-validating each one against the scan

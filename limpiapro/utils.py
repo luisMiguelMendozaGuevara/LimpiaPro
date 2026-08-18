@@ -381,12 +381,18 @@ def _delete_measured(path: str) -> tuple[bool, int, list[DeleteError]]:
 
     def _remove_file(entry, op="remove") -> None:
         nonlocal freed
+        if not os.path.lexists(entry.path):
+            return
         try:
             freed += entry.stat().st_size
+        except FileNotFoundError:
+            return
         except OSError as e:
             errors.append(_make_error(entry.path, "stat", e))
         try:
             os.remove(entry.path)
+        except FileNotFoundError:
+            return
         except OSError as e:
             errors.append(_make_error(entry.path, op, e))
             _make_writable(entry.path)

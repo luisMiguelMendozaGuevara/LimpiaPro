@@ -13,12 +13,10 @@ Entry point: main() re-elevates through ShellExecuteW when not admin
 (the app keeps running without admin if the UAC prompt is declined)."""
 
 import ctypes
-import json
 import os
 import platform
 import sys
 import threading
-import time
 import tkinter.ttk as ttk
 import traceback
 from tkinter import filedialog, messagebox
@@ -30,6 +28,7 @@ from .categories import build_categories
 from .i18n import t
 from .paths import get_cache_file
 from .recycle import empty_recycle_bin, recycle_bin_size
+from .services import CacheService, CleanupService, UiDispatcher
 from .ui.clean_page import CleanPage
 from .ui.duplicates_page import DuplicatePage
 from .ui.log_page import LogPage
@@ -79,10 +78,14 @@ class CleanerApp(ctk.CTk):
             self.configure(fg_color=("#e8e8e8", "#17181c"))
 
         self.categories = build_categories()
+        self.cache_service = CacheService(self.CACHE_FILE, self.CACHE_SCHEMA, APP_VERSION)
+        self.cleanup_service = CleanupService()
+
         self.scanner = None
         self.busy = False
         # Cooperative cancellation for long scans/cleans (P1-13).
         self.cancel_requested = False
+        self.ui_dispatcher = UiDispatcher()
 
         # Resize debounce: avoid one repaint per <Configure> event.
         self._resize_job = None
@@ -296,6 +299,10 @@ class CleanerApp(ctk.CTk):
         """Append a message to the activity log page."""
         self.log_page.log(msg)
 
+    def post_ui(self, callback):
+        """Queue a callback on Tk's main thread through the dispatcher."""
+        return self.ui_dispatcher.post(callback)
+
     def set_status(self, text):
         """Update the global status label (lives on the cleanup page)."""
         self.pages_clean.status_lbl.configure(text=text)
@@ -327,41 +334,13 @@ class CleanerApp(ctk.CTk):
     # ------------------------------------------------------------------ analyze
 
     def _load_cache(self):
-        """Load the last scan results cache ({} when missing, corrupt or
-        written by a different schema/app version)."""
-        try:
-            with open(self.CACHE_FILE, encoding="utf-8") as f:
-                raw = json.load(f)
-        except Exception:
-            return {}
-        if not isinstance(raw, dict):
-            return {}
-        if raw.get("schema") != self.CACHE_SCHEMA:
-            return {}
-        if raw.get("app_version") != APP_VERSION:
-            return {}
-        data = raw.get("data")
-        return data if isinstance(data, dict) else {}
+        """Load validated cache data through CacheService."""
+        return self.cache_service.load()
 
     def _save_cache(self):
-        """Persist per-category size/files to disk (atomic tmp+replace)
-        with schema/app provenance metadata so stale caches are never
-        mistaken for fresh ones."""
+        """Persist category results through CacheService."""
         data = {c.key: {"size": c.size, "files": c.files} for c in self.categories}
-        payload = {
-            "schema": self.CACHE_SCHEMA,
-            "app_version": APP_VERSION,
-            "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "platform": platform.platform(),
-            "data": data,
-        }
-        try:
-            tmp = self.CACHE_FILE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False)
-            os.replace(tmp, self.CACHE_FILE)
-        except Exception:
-            pass  # nosec B110 - cache write is best-effort
+        self.cache_service.save(data, platform.platform())
 
     def analyze_all(self):
         """Kick off a full system analysis on a background coordinator
@@ -640,11 +619,13 @@ class CleanerApp(ctk.CTk):
         """Collect up to 1000 target paths per selected category.
         Returns a list of text chunks for the preview box."""
         out = []
+        preview_data = iter(self.cleanup_service.preview(
+            [c for c in selected if not c.recycle_bin], limit=1000))
         for cat in selected:
             if cat.recycle_bin:
                 out.append(t("preview.recycle_section", label=cat.label) + "\n\n")
                 continue
-            files, scanned = cat.list_files(1000)
+            _preview_cat, files, scanned = next(preview_data)
             out.append(t("preview.section", label=cat.label,
                          shown=len(files), total=scanned) + "\n")
             for f in files:
@@ -680,6 +661,15 @@ def _excepthook(exc_type, exc, tb):
 def main():
     """Entry point: re-elevate to administrator when possible, then run
     the application (continuing without admin if UAC is declined)."""
+    if "--version" in sys.argv:
+        print(f"{APP_NAME} {APP_VERSION}")
+        return
+    if "--smoke-test" in sys.argv:
+        # Import and construct the non-UI application graph without touching
+        # the registry or starting Tk; suitable for packaged CI smoke tests.
+        build_categories()
+        print(f"{APP_NAME} smoke test passed")
+        return
     _errlog("--- startup ---")
     if not is_admin():
         try:

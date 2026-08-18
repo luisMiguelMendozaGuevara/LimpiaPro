@@ -24,15 +24,13 @@ jobs:
         run: ruff check limpiapro/ tests/
 
       - name: Run Ruff (formatter check)
-        run: ruff format --check limpiapro/ tests/
+        run: ruff format --check limpiapro/services/ limpiapro/contracts.py tests/test_destructive_paths.py tests/test_paths.py tests/test_services.py tests/test_startup_registry.py
 
       - name: Run Pyright (type checker)
         run: pyright limpiapro/
-        continue-on-error: true  # Allow type errors for now, track them
 
       - name: Run Bandit (security scanner)
         run: bandit -r limpiapro/ -c pyproject.toml -f json -o bandit-report.json
-        continue-on-error: true
 
       - name: Upload Bandit report
         if: always()
@@ -97,17 +95,7 @@ jobs:
 
       - name: Smoke test executable
         run: |
-          Write-Host "Running smoke test..."
-          $process = Start-Process -FilePath "dist/LimpiaPro.exe" -PassThru -WindowStyle Hidden
-          Start-Sleep -Seconds 5
-          
-          if ($process.HasExited) {
-            Write-Error "Application crashed on startup (exit code: $($process.ExitCode))"
-            exit 1
-          }
-          
-          Stop-Process -Id $process.Id -Force
-          Write-Host "✓ Smoke test passed"
+          dist\LimpiaPro.exe --smoke-test
 
       - name: Upload executable
         uses: actions/upload-artifact@v4

@@ -11,6 +11,7 @@ from tkinter import messagebox
 import customtkinter as ctk
 
 from .. import APP_NAME
+from ..contracts import CleanerAppProtocol
 from ..i18n import t
 from ..processes import get_processes, is_protected, kill_process
 from ..startup import get_disabled_startup, get_startup_apps, is_runonce_entry, set_startup
@@ -33,7 +34,7 @@ from .widgets import fill_tree, make_tree, run_async, selected_many, selected_on
 class StartupPage(ctk.CTkFrame):
     """Startup apps, scheduled tasks and running processes manager."""
 
-    def __init__(self, master, app):
+    def __init__(self, master, app: CleanerAppProtocol):
         super().__init__(master, fg_color="transparent")
         self.app = app
 
@@ -57,24 +58,34 @@ class StartupPage(ctk.CTkFrame):
         tab = self.tabs.tab(t("tab.startup_apps"))
         toolbar = ctk.CTkFrame(tab, fg_color="transparent")
         toolbar.pack(fill="x", padx=10, pady=(8, 4))
-        self.startup_refresh_btn = ctk.CTkButton(toolbar, text=t("btn.refresh"), width=100,
-                                                 command=self.refresh_startup)
+        self.startup_refresh_btn = ctk.CTkButton(
+            toolbar, text=t("btn.refresh"), width=100, command=self.refresh_startup
+        )
         self.startup_refresh_btn.pack(side="left")
-        self.startup_disable_btn = ctk.CTkButton(toolbar, text=t("btn.disable_selected"),
-                                                 width=180,
-                                                 fg_color=ORANGE, hover_color=ORANGE_HOVER,
-                                                 command=self.disable_startup_selected)
+        self.startup_disable_btn = ctk.CTkButton(
+            toolbar,
+            text=t("btn.disable_selected"),
+            width=180,
+            fg_color=ORANGE,
+            hover_color=ORANGE_HOVER,
+            command=self.disable_startup_selected,
+        )
         self.startup_disable_btn.pack(side="left", padx=8)
-        ctk.CTkButton(toolbar, text=t("btn.reenable"), width=190,
-                      command=self.show_disabled_startup).pack(side="left")
+        ctk.CTkButton(
+            toolbar, text=t("btn.reenable"), width=190, command=self.show_disabled_startup
+        ).pack(side="left")
 
         self.icon_cache = IconCache(size=16)
         frame = ctk.CTkFrame(tab, fg_color="transparent")
         frame.pack(fill="both", expand=True)
         self.startup_tree = make_tree(
             frame,
-            [("#0", t("col.name"), 260), ("src", t("col.source"), 160),
-             ("cmd", t("col.command"), 420)])
+            [
+                ("#0", t("col.name"), 260),
+                ("src", t("col.source"), 160),
+                ("cmd", t("col.command"), 420),
+            ],
+        )
         self.startup_data = []
 
     def refresh_startup(self):
@@ -82,8 +93,12 @@ class StartupPage(ctk.CTkFrame):
         if self.app.busy:
             return
         self.app.set_busy(True, mode="indeterminate")
-        run_async(self.app, self._startup_worker, self._startup_done,
-                  on_error=lambda exc: self._generic_error(t("area.startup"), exc))
+        run_async(
+            self.app,
+            self._startup_worker,
+            self._startup_done,
+            on_error=lambda exc: self._generic_error(t("area.startup"), exc),
+        )
 
     def _startup_worker(self):
         """Gather startup entries and extract their icons as PNG bytes.
@@ -103,6 +118,7 @@ class StartupPage(ctk.CTkFrame):
     def _icon_bytes(self, command):
         """PNG bytes of the icon for a startup command (or None)."""
         from ..winstyle import get_file_icon_png
+
         return get_file_icon_png(command)
 
     def _startup_done(self, data, icons):
@@ -126,13 +142,13 @@ class StartupPage(ctk.CTkFrame):
 
     def disable_startup_selected(self):
         """Confirm and disable the selected startup app on a worker.
-        
+
         RunOnce entries (P1-11) get a stronger warning because disabling
         them may prevent a one-time task from ever executing."""
         entry = selected_one(self.startup_tree, self.startup_data)
         if entry is None:
             return
-        
+
         # Show stronger warning for RunOnce entries
         if is_runonce_entry(entry):
             msg = (
@@ -143,13 +159,11 @@ class StartupPage(ctk.CTkFrame):
             if not messagebox.askyesno(APP_NAME, msg, icon="warning"):
                 return
         else:
-            if not messagebox.askyesno(
-                    APP_NAME, t("msg.disable_startup", name=entry["name"])):
+            if not messagebox.askyesno(APP_NAME, t("msg.disable_startup", name=entry["name"])):
                 return
-        
+
         self.app.set_busy(True, mode="indeterminate")
-        run_async(self.app, self._disable_startup_worker,
-                  self._disable_startup_done, (entry,))
+        run_async(self.app, self._disable_startup_worker, self._disable_startup_done, (entry,))
 
     def _disable_startup_worker(self, entry):
         """Move a startup entry to its disabled counterpart.
@@ -165,8 +179,7 @@ class StartupPage(ctk.CTkFrame):
             self.app.set_status(t("status.startup_disabled", name=entry["name"]))
         else:
             self.app.set_status(t("status.startup_disable_error"))
-            self.app.log(t("log.startup_disable_error",
-                           name=entry["name"], msg=msg))
+            self.app.log(t("log.startup_disable_error", name=entry["name"], msg=msg))
             messagebox.showerror(APP_NAME, t("msg.startup_disable_error", msg=msg))
         self.refresh_startup()
 
@@ -175,12 +188,16 @@ class StartupPage(ctk.CTkFrame):
         if self.app.busy:
             return
         self.app.set_busy(True, mode="indeterminate")
-        run_async(self.app, self._disabled_worker, self._disabled_done,
-                  on_error=lambda exc: self._generic_error(t("area.disabled"), exc))
+        run_async(
+            self.app,
+            self._disabled_worker,
+            self._disabled_done,
+            on_error=lambda exc: self._generic_error(t("area.disabled"), exc),
+        )
 
     def _disabled_worker(self):
         """Collect the disabled startup entries off the UI thread."""
-        return get_disabled_startup(),
+        return (get_disabled_startup(),)
 
     def _disabled_done(self, disabled):
         """Open the re-enable dialog (Toplevel with a selection tree)."""
@@ -191,14 +208,16 @@ class StartupPage(ctk.CTkFrame):
         win = ctk.CTkToplevel(self)
         win.title(t("title.reattach"))
         win.geometry("640x420")
-        ctk.CTkLabel(win, text=t("startup.reattach_label"),
-                     font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=14, pady=(10, 4))
+        ctk.CTkLabel(
+            win, text=t("startup.reattach_label"), font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="w", padx=14, pady=(10, 4))
         frame = ctk.CTkFrame(win, fg_color="transparent")
         frame.pack(fill="both", expand=True)
-        tree = make_tree(frame, [("#0", t("col.name"), 240),
-                                 ("cmd", t("col.cmd_file"), 360)])
-        specs = [(str(i), "", e["name"], (e["command"] or e.get("filename", "")), {})
-                 for i, e in enumerate(disabled)]
+        tree = make_tree(frame, [("#0", t("col.name"), 240), ("cmd", t("col.cmd_file"), 360)])
+        specs = [
+            (str(i), "", e["name"], (e["command"] or e.get("filename", "")), {})
+            for i, e in enumerate(disabled)
+        ]
         fill_tree(tree, specs)
 
         def _re():
@@ -206,11 +225,16 @@ class StartupPage(ctk.CTkFrame):
             if not sel:
                 return
             self.app.set_busy(True, mode="indeterminate")
-            run_async(self.app, self._reenable_worker,
-                      self._reenable_done, (sel, win))
+            run_async(self.app, self._reenable_worker, self._reenable_done, (sel, win))
 
-        ctk.CTkButton(win, text=t("btn.reenable_selected"), width=180,
-                      fg_color=GREEN, hover_color=GREEN_HOVER, command=_re).pack(padx=14, pady=8)
+        ctk.CTkButton(
+            win,
+            text=t("btn.reenable_selected"),
+            width=180,
+            fg_color=GREEN,
+            hover_color=GREEN_HOVER,
+            command=_re,
+        ).pack(padx=14, pady=8)
 
     def _reenable_worker(self, entries, win):
         """Re-enable the selected entries; the dialog closes afterwards.
@@ -245,16 +269,27 @@ class StartupPage(ctk.CTkFrame):
         tab = self.tabs.tab(t("tab.tasks"))
         toolbar = ctk.CTkFrame(tab, fg_color="transparent")
         toolbar.pack(fill="x", padx=10, pady=(8, 4))
-        self.tasks_refresh_btn = ctk.CTkButton(toolbar, text=t("btn.refresh"), width=100,
-                                               command=self.refresh_tasks)
+        self.tasks_refresh_btn = ctk.CTkButton(
+            toolbar, text=t("btn.refresh"), width=100, command=self.refresh_tasks
+        )
         self.tasks_refresh_btn.pack(side="left")
-        self.tasks_disable_btn = ctk.CTkButton(toolbar, text=t("btn.disable"), width=110,
-                                               fg_color=ORANGE, hover_color=ORANGE_HOVER,
-                                               command=lambda: self._toggle_task(False))
+        self.tasks_disable_btn = ctk.CTkButton(
+            toolbar,
+            text=t("btn.disable"),
+            width=110,
+            fg_color=ORANGE,
+            hover_color=ORANGE_HOVER,
+            command=lambda: self._toggle_task(False),
+        )
         self.tasks_disable_btn.pack(side="left", padx=8)
-        self.tasks_enable_btn = ctk.CTkButton(toolbar, text=t("btn.enable"), width=100,
-                                              fg_color=GREEN, hover_color=GREEN_HOVER,
-                                              command=lambda: self._toggle_task(True))
+        self.tasks_enable_btn = ctk.CTkButton(
+            toolbar,
+            text=t("btn.enable"),
+            width=100,
+            fg_color=GREEN,
+            hover_color=GREEN_HOVER,
+            command=lambda: self._toggle_task(True),
+        )
         self.tasks_enable_btn.pack(side="left")
         self.tasks_info = ctk.CTkLabel(toolbar, text="", text_color=MUTED)
         self.tasks_info.pack(side="right", padx=8)
@@ -263,9 +298,13 @@ class StartupPage(ctk.CTkFrame):
         frame.pack(fill="both", expand=True)
         self.tasks_tree = make_tree(
             frame,
-            [("#0", t("col.task"), 300), ("status", t("col.status"), 90, "center"),
-             ("sched", t("col.schedule"), 130, "center"),
-             ("next", t("col.next_run"), 180)])
+            [
+                ("#0", t("col.task"), 300),
+                ("status", t("col.status"), 90, "center"),
+                ("sched", t("col.schedule"), 130, "center"),
+                ("next", t("col.next_run"), 180),
+            ],
+        )
         self.tasks_data = []
 
     def refresh_tasks(self):
@@ -273,8 +312,12 @@ class StartupPage(ctk.CTkFrame):
         if self.app.busy:
             return
         self.app.set_busy(True, mode="indeterminate")
-        run_async(self.app, self._refresh_tasks_worker, self._refresh_tasks_done,
-                  on_error=lambda exc: self._generic_error(t("area.tasks"), exc))
+        run_async(
+            self.app,
+            self._refresh_tasks_worker,
+            self._refresh_tasks_done,
+            on_error=lambda exc: self._generic_error(t("area.tasks"), exc),
+        )
 
     def _refresh_tasks_worker(self):
         """Query schtasks off the UI thread."""
@@ -289,20 +332,25 @@ class StartupPage(ctk.CTkFrame):
         specs = []
         for i, task in enumerate(tasks):
             state = task.get("scheduled") or task.get("status", "")
-            is_disabled = ("disabled" in state.lower())
+            is_disabled = "disabled" in state.lower()
             if is_disabled:
                 disabled += 1
             else:
                 enabled += 1
             tag = "disabled" if is_disabled else "enabled"
-            specs.append((str(i), "", task["name"],
-                          (state, task.get("status", ""), task.get("next", "")),
-                          {"tags": (tag,)}))
+            specs.append(
+                (
+                    str(i),
+                    "",
+                    task["name"],
+                    (state, task.get("status", ""), task.get("next", "")),
+                    {"tags": (tag,)},
+                )
+            )
         self.tasks_tree.tag_configure("disabled", foreground=ORANGE)
         self.tasks_tree.tag_configure("enabled", foreground=GREEN_TEXT)
         fill_tree(self.tasks_tree, specs)
-        self.tasks_info.configure(
-            text=t("startup.tasks_count", n=enabled, m=disabled))
+        self.tasks_info.configure(text=t("startup.tasks_count", n=enabled, m=disabled))
         self.app.log(t("log.tasks_loaded", n=len(tasks)))
 
     def _toggle_task(self, enable):
@@ -314,8 +362,9 @@ class StartupPage(ctk.CTkFrame):
         if not messagebox.askyesno(APP_NAME, t(key, name=task["name"])):
             return
         self.app.set_busy(True, mode="indeterminate")
-        run_async(self.app, self._toggle_task_worker,
-                  self._toggle_task_done, (task["name"], enable))
+        run_async(
+            self.app, self._toggle_task_worker, self._toggle_task_done, (task["name"], enable)
+        )
 
     def _toggle_task_worker(self, name, enable):
         """Flip one task through schtasks. Returns (ok, msg, name, enable)."""
@@ -343,28 +392,42 @@ class StartupPage(ctk.CTkFrame):
         tab = self.tabs.tab(t("tab.processes"))
         toolbar = ctk.CTkFrame(tab, fg_color="transparent")
         toolbar.pack(fill="x", padx=10, pady=(8, 4))
-        self.proc_refresh_btn = ctk.CTkButton(toolbar, text=t("btn.refresh"), width=100,
-                                              command=self.refresh_processes)
+        self.proc_refresh_btn = ctk.CTkButton(
+            toolbar, text=t("btn.refresh"), width=100, command=self.refresh_processes
+        )
         self.proc_refresh_btn.pack(side="left")
-        self.kill_btn = ctk.CTkButton(toolbar, text=t("btn.end_process"), width=140,
-                                      fg_color=RED, hover_color=RED_HOVER,
-                                      command=self.kill_selected)
+        self.kill_btn = ctk.CTkButton(
+            toolbar,
+            text=t("btn.end_process"),
+            width=140,
+            fg_color=RED,
+            hover_color=RED_HOVER,
+            command=self.kill_selected,
+        )
         self.kill_btn.pack(side="left", padx=8)
         self.proc_search_var = ctk.StringVar()
-        ctk.CTkEntry(toolbar, textvariable=self.proc_search_var,
-                     placeholder_text=t("startup.search_placeholder"),
-                     width=220).pack(side="right", padx=6)
-        ctk.CTkButton(toolbar, text=t("btn.filter"), width=70,
-                      command=self.refresh_processes).pack(side="right")
+        ctk.CTkEntry(
+            toolbar,
+            textvariable=self.proc_search_var,
+            placeholder_text=t("startup.search_placeholder"),
+            width=220,
+        ).pack(side="right", padx=6)
+        ctk.CTkButton(toolbar, text=t("btn.filter"), width=70, command=self.refresh_processes).pack(
+            side="right"
+        )
 
         frame = ctk.CTkFrame(tab, fg_color="transparent")
         frame.pack(fill="both", expand=True)
         self.proc_tree = make_tree(
             frame,
-            [("#0", t("col.process"), 260), ("pid", "PID", 70, "center"),
-             ("session", t("col.session"), 80, "center"),
-             ("mem", t("col.memory"), 90, "e"),
-             ("user", t("col.user"), 160)])
+            [
+                ("#0", t("col.process"), 260),
+                ("pid", "PID", 70, "center"),
+                ("session", t("col.session"), 80, "center"),
+                ("mem", t("col.memory"), 90, "e"),
+                ("user", t("col.user"), 160),
+            ],
+        )
         self.proc_data = []
 
     def refresh_processes(self):
@@ -372,8 +435,12 @@ class StartupPage(ctk.CTkFrame):
         if self.app.busy:
             return
         self.app.set_busy(True, mode="indeterminate")
-        run_async(self.app, self._refresh_processes_worker, self._refresh_processes_done,
-                  on_error=lambda exc: self._generic_error(t("area.processes"), exc))
+        run_async(
+            self.app,
+            self._refresh_processes_worker,
+            self._refresh_processes_done,
+            on_error=lambda exc: self._generic_error(t("area.processes"), exc),
+        )
 
     def _refresh_processes_worker(self):
         """Query tasklist off the UI thread."""
@@ -390,8 +457,9 @@ class StartupPage(ctk.CTkFrame):
             if search and search not in p["name"].lower():
                 continue
             count += 1
-            specs.append((str(p["pid"]), "", p["name"],
-                          (p["pid"], p["session"], p["mem"], p["user"]), {}))
+            specs.append(
+                (str(p["pid"]), "", p["name"], (p["pid"], p["session"], p["mem"], p["user"]), {})
+            )
         fill_tree(self.proc_tree, specs)
         self.app.log(t("log.processes_shown", n=count))
 
@@ -414,8 +482,7 @@ class StartupPage(ctk.CTkFrame):
         if is_protected(name):
             messagebox.showinfo(APP_NAME, t("msg.process_protected", name=name))
             return
-        if not messagebox.askyesno(
-                APP_NAME, t("msg.kill_process", name=name, pid=pid)):
+        if not messagebox.askyesno(APP_NAME, t("msg.kill_process", name=name, pid=pid)):
             return
         self.app.set_busy(True, mode="indeterminate")
         run_async(self.app, self._kill_worker, self._kill_done, (pid, name))

@@ -1,9 +1,9 @@
 @echo off
 setlocal EnableDelayedExpansion
-title LimpiaPro v2.2 - Release Tool
+title LimpiaPro v2.3 - Release Tool
 
 echo ============================================================
-echo   LimpiaPro v2.2 - Release Tool
+echo   LimpiaPro v2.3 - Release Tool
 echo   %date% %time%
 echo ============================================================
 echo.

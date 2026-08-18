@@ -1,4 +1,4 @@
-"""Structured audit logging for operations (P1-16).
+r"""Structured audit logging for operations (P1-16).
 
 This module provides a JSONL-based audit log for all significant operations
 (cleanup, scan, preview, uninstall, etc.) that complements the user-facing
@@ -32,13 +32,11 @@ Usage:
 """
 
 import json
-import os
 import time
 from pathlib import Path
 from typing import Literal
 
 from .paths import get_logs_dir
-
 
 Operation = Literal["cleanup", "scan", "preview", "uninstall", "startup", 
                     "duplicates", "tasks", "processes", "update"]
@@ -75,7 +73,7 @@ class AuditLogger:
         error_msg: str = "",
         details: dict | None = None
     ) -> None:
-        """Log a single operation.
+        r"""Log a single operation.
         
         Args:
             operation: High-level operation type (cleanup, scan, etc.)
@@ -115,7 +113,7 @@ class AuditLogger:
         try:
             with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
-        except Exception:
+        except Exception:  # nosec B110 - audit logging must not break operations
             # Audit logging must never fail the main operation
             pass
     
@@ -139,7 +137,7 @@ class AuditLogger:
         total_ops = 0
         
         try:
-            with open(self.log_path, "r", encoding="utf-8") as f:
+            with open(self.log_path, encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
@@ -154,7 +152,7 @@ class AuditLogger:
                             failures_by_error_code[code] = failures_by_error_code.get(code, 0) + 1
                     except (json.JSONDecodeError, KeyError):
                         continue
-        except Exception:
+        except Exception:  # nosec B110 - malformed audit lines are ignored
             pass
         
         # Sort by frequency
