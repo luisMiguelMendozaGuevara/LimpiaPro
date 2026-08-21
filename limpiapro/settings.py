@@ -39,8 +39,16 @@ class Settings:
         if not isinstance(raw, dict):
             raw = {}
         valid = {f.name for f in fields(cls)}
-        kwargs = {k: v for k, v in raw.items()
-                  if k in valid and isinstance(v, (str, bool))}
+        bool_fields = {"auto_analyze", "confirm_before_clean"}
+        str_fields = {"theme", "language"}
+        kwargs: dict = {}
+        for key, value in raw.items():
+            if key not in valid:
+                continue
+            if key in bool_fields and isinstance(value, bool):
+                kwargs[key] = value
+            elif key in str_fields and isinstance(value, str):
+                kwargs[key] = value
         return cls(**kwargs)
 
     def save(self, path: str | os.PathLike[str] | None = None) -> None:

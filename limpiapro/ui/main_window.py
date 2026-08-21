@@ -253,7 +253,10 @@ class MainWindow(QMainWindow):
         self.set_status(t("status.winapp_loaded", n=count))
 
     def _on_winapp_error(self, message: str) -> None:
+        from PySide6.QtWidgets import QMessageBox
         self.set_status(t("status.winapp_error"))
+        QMessageBox.critical(self, APP_NAME,
+                             t("msg.winapp_error", exc=message))
 
     def _on_operation_error(self, message: str) -> None:
         _errlog(f"operation error: {message}")

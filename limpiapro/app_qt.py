@@ -52,14 +52,19 @@ def main() -> None:
     _errlog("--- qt startup ---")
     if not is_admin() and _maybe_elevate():
         return
+    from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 
     from .ui.main_window import MainWindow
     from .ui.theme import apply_theme
+    from .utils import app_dir
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)
+    icon_path = os.path.join(app_dir(), "assets", "limpiadora.ico")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     apply_theme(app)
     window = MainWindow()
     window.show()

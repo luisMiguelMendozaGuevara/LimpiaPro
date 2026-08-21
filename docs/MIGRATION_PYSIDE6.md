@@ -151,11 +151,68 @@ legítimas**; el borrado de archivos individuales sigue permitido.
 ## 5. Plan de fases (estado)
 
 - [x] **Fase 1 — Auditoría** (este documento)
-- [ ] **Fase 2 — SafetyGuard** (`safety.py` + integración + `tests/test_safety_guard.py`)
-- [ ] **Fase 3 — Separación Core/UI** (Controller con API analyze/clean/cancel/get_results)
-- [ ] **Fase 4 — Migración PySide6** (estructura `ui/`, `QApplication`+`QMainWindow`+`QStackedWidget`)
-- [ ] **Fase 5 — Workers Qt** (análisis/limpieza en hilos; eventos agrupados)
-- [ ] **Fase 6 — Flujo de limpieza** (Analizar→Resultados→Confirmar→SafetyGuard→Eliminar→Resultado; sin re-escaneo)
-- [ ] **Fase 7 — Rendimiento** (medir startup/análisis/Winapp2/clean/memoria; optimizar solo cuellos demostrados)
-- [ ] **Fase 8 — Diseño** (sidebar, dashboard, tarjetas, progreso, estados, iconos, dark theme, DPI)
-- [ ] **Fase 9 — Validación** (funcionalidad + UI sin congelarse)
+- [x] **Fase 2 — SafetyGuard** (`limpiapro/safety.py` + integración + `tests/test_safety_guard.py`)
+- [x] **Fase 3 — Separación Core/UI** (`limpiapro/controller.py::LimpiaProController` con analyze/preview/clean/cancel/get_results/load_winapp_rules)
+- [x] **Fase 4 — Migración PySide6** (`limpiapro/ui/`: main_window + pages/ + widgets/ + dialogs/ + resources/; entry `limpiador.py --qt`; legacy en `ui/legacy_tk/`)
+- [x] **Fase 5 — Workers Qt** (QThreads en el controller; eventos started/progress/result/finished/error/cancelled; actualizaciones agrupadas; cancelación cooperativa)
+- [x] **Fase 6 — Flujo de limpieza** (Analizar→Resultados→Confirmar→SafetyGuard (Core)→Eliminar→Resultado; sin re-escaneo tras limpiar: los tamaños se actualizan in-place)
+- [x] **Fase 7 — Rendimiento** (ver §6: mediciones y optimizaciones demostradas)
+- [x] **Fase 8 — Diseño** (sidebar, dashboard con tarjetas de estado, tarjetas de categorías, progreso global, estados éxito/error, iconos emoji + ICO de ventana, dark/light/system theme, DPI por Qt)
+- [x] **Fase 9 — Validación** (ver §7)
+
+---
+
+## 6. Rendimiento (Fase 7 — medido, `tools/benchmark.py`)
+
+Baseline (winapp2.ini real, ~46k archivos):
+
+| Métrica | Antes | Después | Ganancia |
+| --- | --- | --- | --- |
+| Análisis completo | 15.4 s | 4.06 s | 3.8× |
+| Scan categoría winapp | 10.3 s | 2.96 s | 3.5× |
+| Preview winapp (list_files) | 9.1 s | 2.62 s | 3.5× |
+| Startup (build_categories) | ~0.61 s | ~0.63 s | sin cambio |
+| Puerta de seguridad | — | 16 µs/llamada | aceptable |
+
+Cuellos de botella demostrados por cProfile y corregidos:
+
+1. **Matching de patrones**: `fnmatch` por (archivo × patrón) (112k llamadas, 4.4 s) →
+   `WinAppRule.patterns_re`, regex precompiladas con `re.IGNORECASE` (compilación
+   perezosa: el parser crea ~14k reglas pero solo se escanean las activas).
+2. **Stats duplicados por archivo**: `os.walk` + `_safe_size` (isdir + getsize,
+   ~4 s) → `_iter_tree_files` (utils): walker `os.scandir` único compartido por
+   scan/preview/clean/`iter_file_sizes`, tamaño desde `DirEntry.stat()`; respeta
+   `rule.recurse` y nunca desciende por junctions.
+3. **Duplicación de recorridos**: `scan()` + `list_files()` recorren dos veces
+   (inherente a mostrar la vista previa); el clean reutiliza el snapshot, y tras
+   limpiar NO se re-escanea (Fase 6). Pendiente como mejora futura: deduplicar
+   walks entre reglas winapp2 con raíces solapadas.
+
+## 7. Validación (Fase 9)
+
+- `py -3.12 -m pytest tests/ -q` → **123 passed, 1 skipped** (la skippeada es
+  symlinks por falta de privilegio SeCreateSymbolicLinkPrivilege en este equipo).
+- `ruff check limpiapro/ tests/` → limpio.
+- `py -3.12 limpiador.py --qt --version` → `LimpiaPro 2.3`.
+- `py -3.12 limpiador.py --qt --smoke-test` → construye el grafo completo.
+- Arranque end-to-end (offscreen, auto-analyze): ventana + análisis completo en
+  worker → 6 categorías, ~5.5 GiB detectados, salida limpia.
+- Funcionalidad cubierta por tests: análisis, winapp2 (parser/detección), limpieza
+  (usa snapshot, no re-escanea), cancelación cooperativa, configuración
+  (persistencia), SafetyGuard (raíces protegidas y descendientes nunca llegan al
+  borrado, junctions no se siguen).
+- UI: smoke tests headless (offscreen) verifican construcción, navegación,
+  análisis→tarjetas, limpieza→resultados y que la UI procesa eventos mientras el
+  worker corre (sin congelación); errores visibles vía status bar + QMessageBox.
+
+## 8. Pendiente (fuera del alcance de esta migración)
+
+- **Packaging PyInstaller de la UI Qt**: el spec actual empaqueta la legacy.
+  Para la UI Qt: incluir `PySide6` (PyInstaller lo soporta nativamente) y pasar
+  `--qt` en el lanzador, o cambiar el entry point cuando se retire la legacy.
+  Ver skill `limpapro-build`.
+- Retirar `limpiapro/ui/legacy_tk/` (y `app.py`, `services/ui_dispatcher.py`)
+  cuando la migración esté validada en uso real.
+- Deduplicar recorridos winapp2 con raíces solapadas (Fase 7, mejora futura).
+- Tests de integración de las páginas legacy restantes (duplicates/startup/
+  update/uninstall) en la UI Qt (hoy se mantienen solo en legacy).

@@ -132,3 +132,50 @@ def test_busy_disables_actions(qapp, controller, settings):
         assert page.cancel_btn.isEnabled() is False
     finally:
         win.close()
+
+
+def test_ui_stays_responsive_while_busy(qapp, tmp_path, settings):
+    """The UI thread keeps processing events (navigation works) while the
+    analysis runs on its worker thread: no freeze."""
+    folder = tmp_path / "many"
+    folder.mkdir()
+    for i in range(400):
+        (folder / f"f{i}.tmp").write_bytes(b"x" * 32)
+    cat = CleanCategory("many", "Many", "", [str(folder)])
+    controller = LimpiaProController(categories=[cat])
+
+    win = MainWindow(settings=settings, controller=controller)
+    win.show()
+    qapp.processEvents()
+    try:
+        win.controller.analyze()
+        deadline = time.monotonic() + 10
+        navigated = 0
+        while win.controller.busy and time.monotonic() < deadline:
+            qapp.processEvents()          # the UI keeps pumping events
+            win.navigate("results")       # must never block
+            navigated += 1
+            time.sleep(0.002)
+        assert not win.controller.busy
+        assert navigated > 0
+        assert win.pages["results"].tree.topLevelItemCount() == 1
+    finally:
+        win.close()
+
+
+def test_settings_page_persists(qapp, controller, settings, tmp_path,
+                                monkeypatch):
+    import limpiapro.settings as settings_mod
+    monkeypatch.setattr(settings_mod, "_SETTINGS_FILE",
+                        str(tmp_path / "settings.json"))
+    win = MainWindow(settings=settings, controller=controller)
+    win.show()
+    qapp.processEvents()
+    try:
+        page = win.pages["settings"]
+        page.theme_combo.setCurrentIndex(page.theme_combo.findData("light"))
+        qapp.processEvents()
+        assert win.settings.theme == "light"
+        assert settings_mod.Settings.load().theme == "light"
+    finally:
+        win.close()

@@ -151,7 +151,10 @@ class CleanPage(QWidget):
     def on_preview_done(self, data) -> None:
         """Show the collected preview in a dialog (already off the UI
         thread; the snapshot for the upcoming clean was taken too)."""
-        dlg = PreviewDialog(data, self)
+        labels = {r.key: r.label for r in self.host.controller.get_results()}
+        sections = [(labels.get(key, key), files, scanned)
+                    for key, files, scanned in data]
+        dlg = PreviewDialog(sections, self)
         dlg.exec()
 
     def on_preview_error(self, message: str) -> None:
