@@ -207,12 +207,9 @@ Cuellos de botella demostrados por cProfile y corregidos:
 
 ## 8. Pendiente (fuera del alcance de esta migración)
 
-- **Packaging PyInstaller de la UI Qt**: el spec actual empaqueta la legacy.
-  Para la UI Qt: incluir `PySide6` (PyInstaller lo soporta nativamente) y pasar
-  `--qt` en el lanzador, o cambiar el entry point cuando se retire la legacy.
-  Ver skill `limpapro-build`.
-- Retirar `limpiapro/ui/legacy_tk/` (y `app.py`, `services/ui_dispatcher.py`)
-  cuando la migración esté validada en uso real.
+- **Retirar `limpiapro/ui/legacy_tk/`** (y `app.py`, `services/ui_dispatcher.py`)
+  cuando la migración esté validada en uso real. Hasta entonces se accede con
+  `limpiador.py --legacy` (la UI PySide6 es la predeterminada).
 - Deduplicar recorridos winapp2 con raíces solapadas (Fase 7, mejora futura).
 - Tests de integración de las páginas legacy restantes (duplicates/startup/
   update/uninstall) en la UI Qt (hoy se mantienen solo en legacy).
