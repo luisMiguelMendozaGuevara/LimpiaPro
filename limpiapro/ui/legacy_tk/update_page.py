@@ -1,4 +1,4 @@
-"""Page: Windows Update leftovers (WinSxS / DISM).
+﻿"""Page: Windows Update leftovers (WinSxS / DISM).
 
 Measures the component store size and runs DISM analyze/cleanup commands
 on a worker thread. DISM output arrives in the operating system language
@@ -9,10 +9,10 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from .. import APP_NAME
-from ..contracts import CleanerAppProtocol
-from ..i18n import t
-from ..utils import _folder_size, format_size
+from ... import APP_NAME
+from ...contracts import CleanerAppProtocol
+from ...i18n import t
+from ...utils import _folder_size, format_size
 from .theme import MUTED, ORANGE, ORANGE_HOVER, page_header
 from .widgets import run_async
 

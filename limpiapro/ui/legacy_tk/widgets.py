@@ -1,4 +1,4 @@
-"""Shared UI widgets and helpers.
+﻿"""Shared UI widgets and helpers.
 
 Threading model: worker threads never touch tkinter directly. run_async
 executes the worker on a daemon thread and marshals the result back through
@@ -12,9 +12,9 @@ from tkinter import messagebox, ttk
 
 import customtkinter as ctk
 
-from .. import APP_NAME
-from ..i18n import t
-from ..utils import _errlog
+from ... import APP_NAME
+from ...i18n import t
+from ...utils import _errlog
 
 # Thread-safe queue used to run callbacks on the UI thread. A single
 # poller drains it; see start_ui_poller.

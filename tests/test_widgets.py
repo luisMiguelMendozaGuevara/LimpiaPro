@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from limpiapro.ui import widgets
+from limpiapro.ui.legacy_tk import widgets
 
 
 @pytest.fixture(autouse=True)

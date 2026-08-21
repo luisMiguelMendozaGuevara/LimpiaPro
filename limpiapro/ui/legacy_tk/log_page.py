@@ -1,12 +1,12 @@
-"""Page: activity log."""
+﻿"""Page: activity log."""
 
 import time
 
 import customtkinter as ctk
 
-from ..contracts import CleanerAppProtocol
-from ..i18n import t
-from ..winstyle import fluent_font
+from ...contracts import CleanerAppProtocol
+from ...i18n import t
+from ...winstyle import fluent_font
 
 
 class LogPage(ctk.CTkFrame):

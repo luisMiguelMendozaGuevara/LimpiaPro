@@ -1,4 +1,4 @@
-"""Page: Startup manager (startup apps, scheduled tasks, processes).
+﻿"""Page: Startup manager (startup apps, scheduled tasks, processes).
 
 Three sub-tabs in a CTkTabview, each one following the same pattern: a
 worker gathers data off the UI thread via run_async, the done-callback
@@ -10,13 +10,13 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from .. import APP_NAME
-from ..contracts import CleanerAppProtocol
-from ..i18n import t
-from ..processes import get_processes, is_protected, kill_process
-from ..startup import get_disabled_startup, get_startup_apps, is_runonce_entry, set_startup
-from ..tasks import get_scheduled_tasks, set_task_enabled
-from ..winstyle import IconCache
+from ... import APP_NAME
+from ...contracts import CleanerAppProtocol
+from ...i18n import t
+from ...processes import get_processes, is_protected, kill_process
+from ...startup import get_disabled_startup, get_startup_apps, is_runonce_entry, set_startup
+from ...tasks import get_scheduled_tasks, set_task_enabled
+from ...winstyle import IconCache
 from .theme import (
     GREEN,
     GREEN_HOVER,
@@ -117,7 +117,7 @@ class StartupPage(ctk.CTkFrame):
 
     def _icon_bytes(self, command):
         """PNG bytes of the icon for a startup command (or None)."""
-        from ..winstyle import get_file_icon_png
+        from ...winstyle import get_file_icon_png
 
         return get_file_icon_png(command)
 
@@ -152,9 +152,9 @@ class StartupPage(ctk.CTkFrame):
         # Show stronger warning for RunOnce entries
         if is_runonce_entry(entry):
             msg = (
-                f"⚠ ADVERTENCIA: Esta es una entrada de ejecución única (RunOnce).\n\n"
+                f"âš  ADVERTENCIA: Esta es una entrada de ejecuciÃ³n Ãºnica (RunOnce).\n\n"
                 f"Si la desactivas, puede que nunca se ejecute.\n\n"
-                f"¿Estás seguro de que quieres desactivar '{entry['name']}'?"
+                f"Â¿EstÃ¡s seguro de que quieres desactivar '{entry['name']}'?"
             )
             if not messagebox.askyesno(APP_NAME, msg, icon="warning"):
                 return

@@ -118,6 +118,53 @@ _STRINGS = {
         "clean.recycle_empty": "papelera vacia",
         "clean.is_clean": "limpio",
         "clean.n_files": "{n} archivos",
+        "clean.safety_note": ("El borrado pasa por la politica de seguridad "
+                              "central (SafetyGuard): las carpetas protegidas "
+                              "(Documents, Desktop, Downloads, ...) y sus "
+                              "subcarpetas nunca se eliminan."),
+        # ------------------------------------------------------- qt UI
+        "nav.home": "\U0001F3E0  Inicio",
+        "nav.results": "\U0001F4CA  Resultados",
+        "nav.settings": "\U00002699  Configuracion",
+        "home.title": "Bienvenido a LimpiaPro",
+        "home.subtitle": "Analiza tu sistema y libera espacio de forma segura.",
+        "home.stat_junk": "Basura encontrada",
+        "home.stat_categories": "Categorias",
+        "home.stat_status": "Ultimo analisis",
+        "home.stat_files": "{n} archivos detectados",
+        "home.btn_analyze": "Analizar ahora",
+        "home.btn_go_clean": "Ir a Limpieza",
+        "home.btn_go_results": "Ver Resultados",
+        "home.safety_note": ("Seguridad: la limpieza pasa por SafetyGuard. "
+                             "Las carpetas personales (Documents, Desktop, "
+                             "Downloads, Pictures, Music, Videos) y sus "
+                             "subcarpetas nunca pueden eliminarse."),
+        "results.title": "Resultados",
+        "results.subtitle": "Detalle por categoria y resultado final de la limpieza.",
+        "results.col_files": "Archivos",
+        "results.summary": ("Limpieza completada: {freed} liberados, "
+                            "{removed} elementos, {errors} errores."),
+        "results.empty": "Sin resultados. Ejecuta un analisis primero.",
+        "results.btn_go_clean": "Ir a Limpieza",
+        "settings.title": "Configuracion",
+        "settings.subtitle": "Preferencias de la aplicacion.",
+        "settings.group_appearance": "Apariencia",
+        "settings.theme": "Tema",
+        "settings.theme_dark": "Oscuro",
+        "settings.theme_light": "Claro",
+        "settings.theme_system": "Sistema",
+        "settings.language": "Idioma",
+        "settings.lang_auto": "Automatico",
+        "settings.lang_note": "El cambio de idioma se aplica al reiniciar.",
+        "settings.group_behaviors": "Comportamiento",
+        "settings.auto_analyze": "Analizar automaticamente al iniciar",
+        "settings.confirm_clean": "Confirmar antes de limpiar",
+        "settings.group_paths": "Ubicaciones",
+        "settings.cache": "Cache",
+        "settings.logs": "Logs",
+        "settings.data_dir": "Datos de usuario",
+        "settings.group_about": "Acerca de",
+        "settings.saved": "Guardado.",
         # ------------------------------------------------------- categories
         "cat.temp.label": "Archivos temporales del sistema",
         "cat.temp.desc": "TEMP de usuario y sistema, Prefetch",
@@ -391,6 +438,53 @@ _STRINGS = {
         "clean.recycle_empty": "recycle bin empty",
         "clean.is_clean": "clean",
         "clean.n_files": "{n} files",
+        "clean.safety_note": ("Deletion goes through the central safety "
+                              "policy (SafetyGuard): protected folders "
+                              "(Documents, Desktop, Downloads, ...) and "
+                              "their subfolders are never deleted."),
+        # ------------------------------------------------------- qt UI
+        "nav.home": "\U0001F3E0  Home",
+        "nav.results": "\U0001F4CA  Results",
+        "nav.settings": "\U00002699  Settings",
+        "home.title": "Welcome to LimpiaPro",
+        "home.subtitle": "Analyze your system and free up space safely.",
+        "home.stat_junk": "Junk found",
+        "home.stat_categories": "Categories",
+        "home.stat_status": "Last analysis",
+        "home.stat_files": "{n} files detected",
+        "home.btn_analyze": "Analyze now",
+        "home.btn_go_clean": "Go to Cleaning",
+        "home.btn_go_results": "View Results",
+        "home.safety_note": ("Safety: cleaning goes through SafetyGuard. "
+                             "Personal folders (Documents, Desktop, "
+                             "Downloads, Pictures, Music, Videos) and their "
+                             "subfolders can never be deleted."),
+        "results.title": "Results",
+        "results.subtitle": "Per-category detail and final clean outcome.",
+        "results.col_files": "Files",
+        "results.summary": ("Cleaning finished: {freed} freed, {removed} "
+                            "items, {errors} errors."),
+        "results.empty": "No results yet. Run an analysis first.",
+        "results.btn_go_clean": "Go to Cleaning",
+        "settings.title": "Settings",
+        "settings.subtitle": "Application preferences.",
+        "settings.group_appearance": "Appearance",
+        "settings.theme": "Theme",
+        "settings.theme_dark": "Dark",
+        "settings.theme_light": "Light",
+        "settings.theme_system": "System",
+        "settings.language": "Language",
+        "settings.lang_auto": "Automatic",
+        "settings.lang_note": "The language change applies on restart.",
+        "settings.group_behaviors": "Behavior",
+        "settings.auto_analyze": "Analyze automatically on start",
+        "settings.confirm_clean": "Confirm before cleaning",
+        "settings.group_paths": "Locations",
+        "settings.cache": "Cache",
+        "settings.logs": "Logs",
+        "settings.data_dir": "User data",
+        "settings.group_about": "About",
+        "settings.saved": "Saved.",
         # ------------------------------------------------------- categories
         "cat.temp.label": "System temporary files",
         "cat.temp.desc": "User and system TEMP, Prefetch",
@@ -596,6 +690,16 @@ def detect_language():
 
 
 LANG = detect_language()
+
+
+def set_language(code: str) -> None:
+    """Switch the UI language at runtime (settings page).
+
+    New t() calls use the new language; already-built widgets keep their
+    text until the window is rebuilt/restarted."""
+    global LANG
+    code = (code or "").strip().lower()[:2]
+    LANG = code if code in _STRINGS else detect_language()
 
 
 def t(key, **fmt):

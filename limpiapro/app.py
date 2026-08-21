@@ -29,14 +29,14 @@ from .i18n import t
 from .paths import get_cache_file
 from .recycle import empty_recycle_bin, recycle_bin_size
 from .services import CacheService, CleanupService, UiDispatcher
-from .ui.clean_page import CleanPage
-from .ui.duplicates_page import DuplicatePage
-from .ui.log_page import LogPage
-from .ui.startup_page import StartupPage
-from .ui.theme import ACCENT_FALLBACK
-from .ui.uninstall_page import UninstallPage
-from .ui.update_page import UpdatePage
-from .ui.widgets import post_ui, readonly_toplevel, run_async, start_ui_poller
+from .ui.legacy_tk.clean_page import CleanPage
+from .ui.legacy_tk.duplicates_page import DuplicatePage
+from .ui.legacy_tk.log_page import LogPage
+from .ui.legacy_tk.startup_page import StartupPage
+from .ui.legacy_tk.theme import ACCENT_FALLBACK
+from .ui.legacy_tk.uninstall_page import UninstallPage
+from .ui.legacy_tk.update_page import UpdatePage
+from .ui.legacy_tk.widgets import post_ui, readonly_toplevel, run_async, start_ui_poller
 from .utils import _errlog, format_size, is_admin
 from .winapp2 import invalidate_detect_cache, parse_winapp_rules
 from .winstyle import apply_mica_backdrop, fluent_font, get_system_accent

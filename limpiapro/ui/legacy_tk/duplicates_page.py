@@ -1,4 +1,4 @@
-"""Page: duplicate files finder.
+﻿"""Page: duplicate files finder.
 
 Drives DuplicateScanner on a worker thread: the user picks a folder and a
 minimum size, results are shown as tree groups (one "original" plus its
@@ -11,11 +11,11 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from .. import APP_NAME
-from ..contracts import CleanerAppProtocol
-from ..duplicates import DuplicateScanner
-from ..i18n import t
-from ..utils import _delete_path, _safe_size, format_size
+from ... import APP_NAME
+from ...contracts import CleanerAppProtocol
+from ...duplicates import DuplicateScanner
+from ...i18n import t
+from ...utils import _delete_path, _safe_size, format_size
 from .theme import GREEN, GREEN_HOVER, MUTED, RED, RED_HOVER, page_header
 from .widgets import fill_tree, make_tree, run_async
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from ..ui.widgets import post_ui, start_ui_poller
+from ..ui.legacy_tk.widgets import post_ui, start_ui_poller
 
 
 class UiDispatcher:

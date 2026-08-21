@@ -120,12 +120,9 @@ def test_task_worker_done_and_failed():
     assert errs and "boom" in errs[0]
 
 
-def test_controller_api_roundtrip(tmp_path):
+def test_controller_api_roundtrip(tmp_path, qapp):
     """Controller analyze -> preview -> clean -> get_results, exercising
-    the QThread wiring through a QCoreApplication event loop."""
-    from PySide6.QtCore import QCoreApplication
-
-    app = QCoreApplication.instance() or QCoreApplication([])
+    the QThread wiring through a QApplication event loop."""
     cats = _make_categories(tmp_path)
     controller = LimpiaProController(categories=cats)
     seen = {"analyzed": [0], "previewed": [0], "cleaned": [0]}
@@ -138,11 +135,11 @@ def test_controller_api_roundtrip(tmp_path):
         lambda s: seen["cleaned"].__setitem__(0, seen["cleaned"][0] + 1))
 
     controller.analyze()
-    _spin(app, lambda: controller.busy)
+    _spin(qapp, lambda: controller.busy)
     controller.preview(["a", "b"])
-    _spin(app, lambda: controller.busy)
+    _spin(qapp, lambda: controller.busy)
     controller.clean(["a", "b"])
-    _spin(app, lambda: controller.busy)
+    _spin(qapp, lambda: controller.busy)
 
     assert seen["analyzed"][0] == 1
     assert seen["previewed"][0] == 1

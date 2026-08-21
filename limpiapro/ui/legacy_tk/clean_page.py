@@ -1,4 +1,4 @@
-"""Page: system cleanup.
+﻿"""Page: system cleanup.
 
 Shows one row per cleaning category with a checkbox, the measured size and
 the file count. The bottom bar holds the selected total, the global
@@ -6,10 +6,10 @@ progress bar and the status label used by the whole app."""
 
 import customtkinter as ctk
 
-from ..contracts import CleanerAppProtocol
-from ..i18n import t
-from ..utils import format_size
-from ..winstyle import fluent_font
+from ...contracts import CleanerAppProtocol
+from ...i18n import t
+from ...utils import format_size
+from ...winstyle import fluent_font
 from .theme import ACCENT_FALLBACK, GREEN_TEXT, MUTED, page_header
 
 

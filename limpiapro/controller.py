@@ -402,10 +402,14 @@ class LimpiaProController(QObject):
         """Move `worker` to a fresh QThread and run it.
 
         Any of the terminal signals quits the thread; cleanup happens on
-        thread.finished. The worker reference is kept until the thread
-        finishes (dropping it earlier lets Python GC delete the signal
-        source while the thread still runs)."""
-        thread = QThread(self)
+        thread.finished. The thread is intentionally NOT parented to the
+        controller: a parent would destroy it when the controller is
+        garbage-collected while deleteLater is already queued, which
+        double-deletes the QThread and aborts the process. The Python
+        references (self._thread / self._worker) keep both objects alive
+        until the thread finishes."""
+        thread = QThread()
+        self._thread = thread
         self._worker = worker
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
@@ -413,12 +417,14 @@ class LimpiaProController(QObject):
             sig.connect(thread.quit)
 
         def _drop_worker():
-            # Only drop the reference when this thread owns it: the
+            # Only drop the references when this thread owns them: the
             # previous thread's finished may fire after a newer worker
-            # was already started, and clearing it would let GC kill the
-            # new worker's signal source mid-flight.
+            # was already started, and clearing them would let GC kill
+            # the new worker's signal source mid-flight.
             if self._worker is worker:
                 self._worker = None
+            if self._thread is thread:
+                self._thread = None
 
         thread.finished.connect(_drop_worker)
         thread.finished.connect(worker.deleteLater)
