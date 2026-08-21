@@ -1,1 +1,2 @@
 customtkinter>=6.0.0
+PySide6>=6.6

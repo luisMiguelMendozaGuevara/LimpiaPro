@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from .paths import get_logs_dir
+from .safety import SafetyGuard, is_safe_delete_target  # noqa: F401  (re-export)
 
 # Progress: how many files between scan notifications.
 PROGRESS_STATS = 500
@@ -85,81 +86,15 @@ def _make_error(path: str, operation: str, e: OSError | None,
 
 # --------------------------------------------------------------------------
 # Delete safety layer (P0-2): a central policy gate that every destructive
-# operation must pass BEFORE touching the filesystem.
+# operation must pass BEFORE touching the filesystem. The policy lives in
+# limpiapro.safety (SafetyGuard); is_safe_delete_target is re-exported at
+# the top of this module so the historical import path keeps working while
+# the gate itself is a single shared object the UI can never bypass.
 # --------------------------------------------------------------------------
 
-# Directories that must NEVER be deleted recursively as a "target": the
-# user profiles roots, the Windows dir and any drive root. Individual
-# *files* inside these are fine (that is the cleanup itself); this only
-# stops a category from accidentally rmtree-ing a whole protected box.
-_SYSTEM_GUARD_DIRS = {
-    r"C:\Windows",
-    r"C:\Windows\System32",
-    r"C:\Windows\SysWOW64",
-    r"C:\Program Files",
-    r"C:\Program Files (x86)",
-    r"C:\ProgramData",
-    r"C:\Users",
-    r"C:\Users\Default",
-    r"C:\Users\Public",
-}
-
-
-def _guard_dirs() -> set:
-    """Absolute normalized guard set: system dirs + current user profile
-    roots, expanded from the live environment (cheap, cached per call)."""
-    out = set()
-    for d in _SYSTEM_GUARD_DIRS:
-        out.add(os.path.normcase(os.path.normpath(d)))
-    for var in ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP",
-                "PROGRAMFILES", "PROGRAMFILES(X86)", "ProgramData"):
-        v = os.environ.get(var)
-        if v:
-            out.add(os.path.normcase(os.path.normpath(v)))
-    # Well-known per-user folders: an ordinary category must never remove
-    # the user's Desktop/Documents/Downloads etc. whole.
-    profile = os.environ.get("USERPROFILE")
-    if profile:
-        for name in ("Desktop", "Documents", "Downloads", "Music",
-                     "Pictures", "Videos", "Favorites", "Contacts",
-                     "Saved Games", "Searches", "Links", "OneDrive"):
-            out.add(os.path.normcase(os.path.normpath(
-                os.path.join(profile, name))))
-    return out
-
-
-_guard_cache = None
-
-
-def _guards() -> set:
-    global _guard_cache
-    if _guard_cache is None:
-        _guard_cache = _guard_dirs()
-    return _guard_cache
-
-
 def is_drive_root(path: str) -> bool:
-    """True when `path` is exactly a drive root like 'C:\\' or 'C:\\'."""
-    drive, tail = os.path.splitdrive(os.path.normpath(os.path.expandvars(path)))
-    return bool(drive) and tail in ("\\", "/", "")
-
-
-def is_safe_delete_target(path: str) -> bool:
-    """Central delete-safety policy: False when `path` must never become an
-    rmtree/remove target.
-
-    Refused targets:
-      - the path itself is a guarded root (user profile, Windows dir,
-        Program Files, ...),
-      - the path is a drive root.
-
-    Everything else (including the *children* of protected folders, which
-    are the normal cleanup locations) is safe. Individual categories define
-    their locations, but no destructive operation runs without this gate."""
-    p = os.path.normcase(os.path.normpath(os.path.expandvars(path)))
-    if is_drive_root(p):
-        return False
-    return p not in _guards()
+    """True when `path` is exactly a drive root like 'C:\\'."""
+    return SafetyGuard.is_drive_root(path)
 
 
 def app_dir() -> str:
@@ -231,7 +166,12 @@ def iter_file_sizes(folder: str, should_cancel=None) -> Generator[tuple[str, int
     Iterative (an explicit stack of scandir iterators) instead of
     recursive to survive deep trees without hitting the recursion limit;
     OSError on any entry just skips that subtree/file. When
-    `should_cancel` (a callable) turns truthy the walk stops early."""
+    `should_cancel` (a callable) turns truthy the walk stops early.
+
+    Junctions/reparse points are never descended into (os.scandir reports
+    them as directories, so without this check a scan would walk INTO a
+    junction target and count — or later delete — content that lives
+    outside the physical tree, e.g. inside a protected user folder)."""
     stack = []
     try:
         stack.append(os.scandir(folder))
@@ -249,7 +189,7 @@ def iter_file_sizes(folder: str, should_cancel=None) -> Generator[tuple[str, int
             stack.pop().close()
             continue
         try:
-            if entry.is_dir(follow_symlinks=False):
+            if entry.is_dir(follow_symlinks=False) and not os.path.isjunction(entry.path):
                 sub = os.scandir(entry.path)
                 if sub is not None:
                     stack.append(sub)
@@ -283,12 +223,17 @@ def _delete_path(path: str) -> bool:
     check is the source of truth).
 
     Guarded by the delete safety layer: protected roots (user profile,
-    Windows dir, drive root, ...) are refused."""
-    if not is_safe_delete_target(path):
+    Windows dir, drive root, ...) and folder targets under protected user
+    folders are refused."""
+    if not is_safe_delete_target(
+            path, is_dir=os.path.isdir(path) or os.path.isjunction(path)):
         return False
     try:
         if os.path.isdir(path):
-            shutil.rmtree(path, ignore_errors=True)
+            if os.path.islink(path) or os.path.isjunction(path):
+                _remove_link(path)
+            else:
+                shutil.rmtree(path, ignore_errors=True)
             return not os.path.exists(path)
         os.remove(path)
         return not os.path.exists(path)
@@ -319,6 +264,25 @@ def _safe_rmdir(path: str, errors: list[DeleteError] | None = None) -> None:
                 errors.append(_make_error(path, "rmdir", e2))
 
 
+def _remove_link(path: str) -> None:
+    """Remove a symlink or junction *link* without touching its target.
+
+    shutil.rmtree silently leaves junctions in place on Windows
+    (ignore_errors swallows the failure), so links are removed with
+    os.rmdir/os.remove first; rmtree is only the last-resort fallback."""
+    try:
+        os.rmdir(path)   # junctions and directory symlinks
+        return
+    except OSError:
+        pass
+    try:
+        os.remove(path)  # file symlinks
+        return
+    except OSError:
+        pass
+    shutil.rmtree(path, ignore_errors=True)
+
+
 def _delete_measured(path: str) -> tuple[bool, int, list[DeleteError]]:
     """Delete a file or a whole folder tree in ONE traversal, returning
     (gone, freed_bytes, errors).
@@ -335,13 +299,17 @@ def _delete_measured(path: str) -> tuple[bool, int, list[DeleteError]]:
     instead of being swallowed, so the UI can report _what_ failed and
     why (P0-5).
 
-    A guarded target (user profile, Windows dir, drive root, ...) is
-    refused here, before any filesystem access (P0-2)."""
-    if not is_safe_delete_target(path):
+    A guarded target (protected root, drive root, or a folder under a
+    protected user folder) is refused here, before any filesystem access
+    (P0-2). The gate receives the caller's intent (is_dir) so a whole
+    folder under Documents is refused while individual files there stay
+    cleanable."""
+    is_dir = os.path.isdir(path) or os.path.isjunction(path)
+    if not is_safe_delete_target(path, is_dir=is_dir):
         return False, 0, [_make_error(path, "safety", None,
                                       kind="safety",
                                       message="refused by delete safety policy")]
-    if not os.path.isdir(path) or os.path.islink(path) or os.path.isjunction(path):
+    if not is_dir or os.path.islink(path) or os.path.isjunction(path):
         # Regular file or a top-level symlink/junction (never followed).
         size = 0
         errors: list[DeleteError] = []
@@ -351,7 +319,10 @@ def _delete_measured(path: str) -> tuple[bool, int, list[DeleteError]]:
             errors.append(_make_error(path, "stat", e))
         try:
             if os.path.isdir(path):
-                shutil.rmtree(path, ignore_errors=True)
+                if os.path.islink(path) or os.path.isjunction(path):
+                    _remove_link(path)
+                else:
+                    shutil.rmtree(path, ignore_errors=True)
             else:
                 os.remove(path)
         except OSError as e:
@@ -359,7 +330,10 @@ def _delete_measured(path: str) -> tuple[bool, int, list[DeleteError]]:
             _make_writable(path)
             try:
                 if os.path.isdir(path):
-                    shutil.rmtree(path, ignore_errors=True)
+                    if os.path.islink(path) or os.path.isjunction(path):
+                        _remove_link(path)
+                    else:
+                        shutil.rmtree(path, ignore_errors=True)
                 else:
                     os.remove(path)
             except OSError as e2:
@@ -419,7 +393,7 @@ def _delete_measured(path: str) -> tuple[bool, int, list[DeleteError]]:
                 if os.path.islink(entry.path) or os.path.isjunction(entry.path):
                     # Junction/symlink: remove the link, never its target.
                     try:
-                        shutil.rmtree(entry.path, ignore_errors=True)
+                        _remove_link(entry.path)
                     except OSError as e:
                         errors.append(_make_error(entry.path, "rmtree", e))
                     continue

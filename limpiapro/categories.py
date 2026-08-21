@@ -123,11 +123,14 @@ class CleanCategory:
 
         The root is normalized and absolutized exactly once here:
         is_excluded() (winapp2) then receives absolute paths and only needs
-        normcase, avoiding one GetFullPathName syscall per file."""
+        normcase, avoiding one GetFullPathName syscall per file. Roots that
+        are themselves junctions are skipped: walking one would traverse
+        the junction target (os.walk descends into junctions) and generate
+        targets that live outside the rule's physical tree."""
         for rule in self.rules or []:
             root = os.path.normcase(os.path.abspath(
                 os.path.expandvars(rule.root)))
-            if os.path.exists(root):
+            if os.path.exists(root) and not os.path.isjunction(root):
                 yield rule, root
 
     def _iter_targets(self, should_cancel=None):
@@ -150,6 +153,12 @@ class CleanCategory:
                 for cur, dirs, fnames in os.walk(root):
                     if should_cancel and should_cancel():
                         return
+                    # Never descend into junctions: os.walk(followlinks=False)
+                    # still follows them (they are not symlinks), which could
+                    # sweep files that live inside a protected user folder
+                    # into the target set.
+                    dirs[:] = [d for d in dirs
+                               if not os.path.isjunction(os.path.join(cur, d))]
                     if not rule.recurse:
                         dirs[:] = []
                     for name in fnames:
