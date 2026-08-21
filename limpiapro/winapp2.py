@@ -101,11 +101,17 @@ class ExcludeKey:
 
 class WinAppRule:
     """One deletion rule (FileKey) with its masks, recursion flag and
-    section exclusions. patterns_lower is a pre-lowered copy so
-    CleanCategory._match_name does not repeat .lower() per file."""
+    section exclusions. patterns_re holds the masks precompiled as
+    case-insensitive regexes (fnmatch.translate), so matching a file does
+    not re-enter fnmatch per pattern — the winapp scan matches tens of
+    thousands of files against thousands of patterns (measured hotspot).
+
+    The regexes compile lazily: the parser builds a rule for every
+    FileKey in winapp2.ini (~14k), but only detected apps are scanned,
+    so compiling eagerly wastes startup time on inactive rules."""
 
     __slots__ = ("root", "recurse", "patterns", "patterns_lower",
-                 "remove_self", "excludes")
+                 "_patterns_re", "remove_self", "excludes")
 
     def __init__(self, root: str, recurse: bool = False,
                  patterns=("*",), remove_self: bool = False,
@@ -114,8 +120,18 @@ class WinAppRule:
         self.recurse = recurse
         self.patterns = tuple(patterns)
         self.patterns_lower = tuple(p.lower() for p in self.patterns)
+        self._patterns_re = None
         self.remove_self = remove_self
         self.excludes = tuple(excludes)
+
+    @property
+    def patterns_re(self):
+        """Compiled case-insensitive regexes for self.patterns (lazy)."""
+        if self._patterns_re is None:
+            self._patterns_re = tuple(
+                re.compile(fnmatch.translate(p), re.IGNORECASE)
+                for p in self.patterns)
+        return self._patterns_re
 
     def is_excluded(self, path: str) -> bool:
         """True when any ExcludeKey protects `path`."""

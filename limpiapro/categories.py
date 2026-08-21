@@ -8,7 +8,6 @@ the same matching logic (masks, RECURSE, ExcludeKey) applies to all three.
 Category labels and descriptions shown in the UI are translated through
 i18n.t() keys ("cat.*")."""
 
-import fnmatch
 import os
 import threading
 
@@ -20,8 +19,8 @@ from .utils import (
     DeleteError,
     _delete_measured,
     _fast_folder_stats,
+    _iter_tree_files,
     _parallel_map,
-    _safe_size,
     glob_like,
     is_safe_delete_target,
 )
@@ -107,14 +106,13 @@ class CleanCategory:
         return out
 
     @staticmethod
-    def _match_name(name, patterns_lower):
-        """Case-insensitive filename match against pre-lowered patterns.
-        Empty pattern lists match everything."""
-        if not patterns_lower:
+    def _match_re(name: str, patterns_re) -> bool:
+        """Case-insensitive filename match against precompiled regexes
+        (fnmatch.translate). Empty pattern lists match everything."""
+        if not patterns_re:
             return True
-        low = name.lower()
-        for p in patterns_lower:
-            if fnmatch.fnmatch(low, p):
+        for rx in patterns_re:
+            if rx.match(name):
                 return True
         return False
 
@@ -146,26 +144,18 @@ class CleanCategory:
                 if should_cancel and should_cancel():
                     return
                 if os.path.isfile(root):
-                    if (self._match_name(os.path.basename(root), rule.patterns_lower)
+                    if (self._match_re(os.path.basename(root),
+                                       rule.patterns_re)
                             and not rule.is_excluded(root)):
                         yield rule, root
                     continue
-                for cur, dirs, fnames in os.walk(root):
-                    if should_cancel and should_cancel():
-                        return
-                    # Never descend into junctions: os.walk(followlinks=False)
-                    # still follows them (they are not symlinks), which could
-                    # sweep files that live inside a protected user folder
-                    # into the target set.
-                    dirs[:] = [d for d in dirs
-                               if not os.path.isjunction(os.path.join(cur, d))]
-                    if not rule.recurse:
-                        dirs[:] = []
-                    for name in fnames:
-                        path = os.path.join(cur, name)
-                        if (self._match_name(name, rule.patterns_lower)
-                                and not rule.is_excluded(path)):
-                            yield rule, path
+                # One scandir traversal per root (never into junctions);
+                # DirEntry carries the stat, so the scan can reuse it.
+                for entry in _iter_tree_files(root, should_cancel,
+                                              recurse=rule.recurse):
+                    if (self._match_re(entry.name, rule.patterns_re)
+                            and not rule.is_excluded(entry.path)):
+                        yield rule, entry.path
         else:
             for loc in self._locations_existing():
                 if should_cancel and should_cancel():
@@ -186,14 +176,34 @@ class CleanCategory:
 
         Each category is scanned on its own thread; roots are walked
         serially inside it (extra parallelism gains nothing on a regular
-        disk)."""
+        disk). File sizes come from the DirEntry stat of the shared
+        traversal, so no extra stat syscall is paid per file."""
         self.size = 0
         self.files = 0
-        for _rule, path in self._iter_targets(should_cancel):
-            self.size += _safe_size(path)
-            self.files += 1
-            if on_progress and self.files % PROGRESS_RULES == 0:
-                on_progress(self.files)
+        for rule, root in self._rule_roots():
+            if should_cancel and should_cancel():
+                break
+            if os.path.isfile(root):
+                if (self._match_re(os.path.basename(root),
+                                   rule.patterns_re)
+                        and not rule.is_excluded(root)):
+                    try:
+                        self.size += os.path.getsize(root)
+                    except OSError:
+                        pass
+                    self.files += 1
+                continue
+            for entry in _iter_tree_files(root, should_cancel,
+                                          recurse=rule.recurse):
+                if (self._match_re(entry.name, rule.patterns_re)
+                        and not rule.is_excluded(entry.path)):
+                    try:
+                        self.size += entry.stat().st_size
+                    except OSError:
+                        pass
+                    self.files += 1
+                    if on_progress and self.files % PROGRESS_RULES == 0:
+                        on_progress(self.files)
         return self.size
 
     def scan(self, on_progress=None, should_cancel=None):

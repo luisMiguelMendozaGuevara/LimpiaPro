@@ -158,20 +158,23 @@ def _parallel_map(func: Callable, items, workers: int | None = None) -> list:
         return out
 
 
-def iter_file_sizes(folder: str, should_cancel=None) -> Generator[tuple[str, int], None, None]:
-    """Generator walking a folder with os.scandir (cached stat) yielding
-    (path, size_bytes) per regular file. Faster than os.walk + getsize
-    (one syscall less per file).
+def _iter_tree_files(folder: str, should_cancel=None, recurse: bool = True):
+    """Yield a DirEntry per regular file under `folder` (depth-first).
 
-    Iterative (an explicit stack of scandir iterators) instead of
-    recursive to survive deep trees without hitting the recursion limit;
-    OSError on any entry just skips that subtree/file. When
-    `should_cancel` (a callable) turns truthy the walk stops early.
+    One scandir-based traversal shared by the winapp rule scan, the
+    preview/clean target iteration and iter_file_sizes: DirEntry carries
+    cached is_dir/is_file and stat(), so size counting needs no second
+    stat (the old os.walk + getsize pattern paid one extra syscall per
+    file — a measured hotspot with 20k+ winapp targets).
 
-    Junctions/reparse points are never descended into (os.scandir reports
-    them as directories, so without this check a scan would walk INTO a
-    junction target and count — or later delete — content that lives
-    outside the physical tree, e.g. inside a protected user folder)."""
+    `recurse=False` restricts the walk to the top level of `folder`
+    (winapp rules without the RECURSE flag). Junctions/reparse points
+    are never descended into: os.scandir reports them as directories, so
+    without this check a walk would traverse INTO the junction target
+    and count — or later delete — content that lives outside the
+    physical tree (e.g. inside a protected user folder). OSError on any
+    entry just skips that subtree/file; `should_cancel` (a callable)
+    stops the walk early when truthy."""
     stack = []
     try:
         stack.append(os.scandir(folder))
@@ -189,12 +192,27 @@ def iter_file_sizes(folder: str, should_cancel=None) -> Generator[tuple[str, int
             stack.pop().close()
             continue
         try:
-            if entry.is_dir(follow_symlinks=False) and not os.path.isjunction(entry.path):
+            if entry.is_dir(follow_symlinks=False):
+                if os.path.isjunction(entry.path) or not recurse:
+                    continue
                 sub = os.scandir(entry.path)
                 if sub is not None:
                     stack.append(sub)
             elif entry.is_file(follow_symlinks=False):
-                yield entry.path, entry.stat().st_size
+                yield entry
+        except OSError:
+            continue
+
+
+def iter_file_sizes(folder: str, should_cancel=None) -> Generator[tuple[str, int], None, None]:
+    """Generator walking a folder with os.scandir (cached stat) yielding
+    (path, size_bytes) per regular file. Faster than os.walk + getsize
+    (one syscall less per file); never descends into junctions; OSError
+    on any entry just skips that subtree/file. When `should_cancel` (a
+    callable) turns truthy the walk stops early."""
+    for entry in _iter_tree_files(folder, should_cancel):
+        try:
+            yield entry.path, entry.stat().st_size
         except OSError:
             continue
 
