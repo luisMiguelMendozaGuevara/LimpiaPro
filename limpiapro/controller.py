@@ -179,12 +179,14 @@ class CleanWorker(QObject):
             self.log.emit(f"cleaning:{cat.label}")
             if cat.recycle_bin:
                 bin_size = recycle_bin_size()
-                ok, _msg = empty_recycle_bin()
+                ok, msg = empty_recycle_bin()
                 if ok:
                     freed += bin_size
                 cumulative += cat.size
-                self.log.emit(f"recycle:{cat.label}:ok" if ok
-                              else f"recycle:{cat.label}:failed")
+                # Carry the failure message through (the UI translates the
+                # ok line; a failure reason may contain ':' so the UI must
+                # split with maxsplit).
+                self.log.emit(f"recycle:{cat.label}:{'ok' if ok else msg}")
                 continue
             # The results step already snapshotted the targets; if not
             # (direct clean), collect the snapshot now so deletion uses

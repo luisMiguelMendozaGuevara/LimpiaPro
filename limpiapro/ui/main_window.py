@@ -339,11 +339,12 @@ class MainWindow(QMainWindow):
             _kind, label, r, e, f = msg.split(":")
             self.log(t("log.cat_cleaned", n=r, e=e, size=format_size(int(f))))
         elif msg.startswith("recycle:"):
-            parts = msg.split(":")
-            if len(parts) >= 3:
-                self.log(t("log.recycle_line",
-                           msg=(t("msg.recycle_emptied")
-                                if parts[2] == "ok" else parts[2])))
+            # recycle:{label}:ok | recycle:{label}:<failure message>
+            parts = msg.split(":", 2)
+            text = (t("msg.recycle_emptied")
+                    if len(parts) > 2 and parts[2] == "ok"
+                    else (parts[2] if len(parts) > 2 else ""))
+            self.log(t("log.recycle_line", msg=text))
 
     def _on_clean_finished(self, summary: CleanSummary) -> None:
         self.log(t("log.total_freed", size=format_size(summary.freed)))

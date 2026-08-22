@@ -93,15 +93,15 @@ Core (sin cambios): categories · winapp2 · utils(_delete_measured/_iter_tree_f
 
 ## 6. Fases (cada una validable y commiteable)
 
-1. **Shell + tema + helpers** — `MainWindow` (sidebar 6 nav + toggle + QStackedWidget), `theme.py`/QSS replicando colores legacy, `widgets.py` Qt (`make_tree`, `fill_tree`, `selected_one/many`, `readonly_*`, `confirm_destructive`), helper `run_async` con QThread, `app_qt.py`.
-2. **Limpieza** (la principal) + diálogo de vista previa + carga winapp2 + papelera.
-3. **Registro**.
-4. **Duplicados**.
-5. **Inicio** (3 sub-pestañas + diálogo re-activar).
-6. **Desinstalador**.
-7. **Windows Update**.
-8. **Paridad visual** — Mica/accent/DPI, retoques QSS, i18n (mismas claves).
-9. **Validación** — checklist + tests + comparación lado a lado.
+- [x] 1. **Shell + tema + helpers** — `MainWindow` (sidebar 6 nav + toggle + QStackedWidget), `theme.py`/QSS replicando colores legacy, `widgets.py` Qt (`make_tree`, `fill_tree`, `selected_one/many`, `readonly_*`, `confirm_destructive`), helper `run_async` (hilo daemon + puente de señal, mismo contrato que legacy), `app_qt.py`.
+- [x] 2. **Limpieza** (la principal) + diálogo de vista previa + carga winapp2 + papelera.
+- [x] 3. **Registro**.
+- [x] 4. **Duplicados**.
+- [x] 5. **Inicio** (3 sub-pestañas + diálogo re-activar).
+- [x] 6. **Desinstalador**.
+- [x] 7. **Windows Update**.
+- [x] 8. **Paridad visual** — Mica/accent/DPI, QSS réplica, i18n (mismas claves + RunOnce).
+- [x] 9. **Validación** — tests headless (123 passed), boot con categorías reales (6 filas, análisis completo), build del exe y comparación con `--legacy`.
 
 ## 7. Riesgos y mitigación
 
