@@ -1,38 +1,109 @@
-"""Page: Limpieza (category selection, preview, clean)."""
+"""Page: system cleanup (replica of the legacy clean page).
+
+Shows one row per cleaning category with a checkbox, the measured size
+and the file count. The bottom bar holds the selected total, the global
+progress bar and the status label used by the whole app."""
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFileDialog,
+    QCheckBox,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
-from ...controller import CategoryResult
 from ...i18n import t
 from ...utils import format_size
-from ..dialogs import ConfirmCleanDialog, PreviewDialog
-from ..widgets import CategoryCard
+
+
+class CategoryRow(QWidget):
+    """One category row: checkbox + icon + labels + size/count."""
+
+    toggled = Signal(str, bool)  # (category key, checked)
+
+    def __init__(self, cat, checked: bool = True,
+                 parent: QWidget | None = None):
+        super().__init__(parent)
+        self.key = cat.key
+        self.setObjectName("catRow")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(12)
+
+        self.check = QCheckBox()
+        self.check.setChecked(checked)
+        self.check.toggled.connect(lambda on, k=cat.key: self.toggled.emit(k, on))
+        lay.addWidget(self.check, 0, Qt.AlignTop)
+
+        self.icon_lbl = QLabel(cat.icon)
+        self.icon_lbl.setFixedWidth(26)
+        lay.addWidget(self.icon_lbl, 0, Qt.AlignTop)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
+        self.title_lbl = QLabel(cat.label)
+        self.title_lbl.setObjectName("catTitle")
+        admin = t("clean.needs_admin") if cat.needs_admin else ""
+        self.desc_lbl = QLabel(cat.description + admin)
+        self.desc_lbl.setObjectName("catDesc")
+        self.desc_lbl.setWordWrap(True)
+        text_col.addWidget(self.title_lbl)
+        text_col.addWidget(self.desc_lbl)
+        lay.addLayout(text_col, 1)
+
+        right = QVBoxLayout()
+        right.setSpacing(0)
+        self.size_lbl = QLabel()
+        self.size_lbl.setObjectName("catSize")
+        self.size_lbl.setAlignment(Qt.AlignRight)
+        self.count_lbl = QLabel()
+        self.count_lbl.setObjectName("catCount")
+        self.count_lbl.setAlignment(Qt.AlignRight)
+        right.addWidget(self.size_lbl)
+        right.addWidget(self.count_lbl)
+        lay.addLayout(right, 0)
+
+        self.set_result(cat)
+
+    # ------------------------------------------------------------ state
+
+    def is_checked(self) -> bool:
+        return self.check.isChecked()
+
+    def set_checked(self, value: bool) -> None:
+        self.check.setChecked(value)
+
+    def set_result(self, cat) -> None:
+        """Refresh the displayed size/count from a category object."""
+        if cat.recycle_bin:
+            txt = f"~{format_size(cat.size)}" if cat.size else t("clean.recycle_empty")
+            count = ""
+        else:
+            txt = format_size(cat.size) if cat.size else t("clean.is_clean")
+            count = t("clean.n_files", n=f"{cat.files:,}") if cat.files else ""
+        self.size_lbl.setText(txt)
+        self.count_lbl.setText(count)
 
 
 class CleanPage(QWidget):
-    """The main cleaning page: one card per category, total and actions.
-
-    It drives the flow Analizar -> Resultados (preview/snapshot) ->
-    Confirmar -> (SafetyGuard inside the core) -> Eliminar -> Resultado."""
+    """Main cleanup page: category checkboxes plus totals and progress."""
 
     def __init__(self, host, parent: QWidget | None = None):
         super().__init__(parent)
         self.host = host
-        self._cards: dict[str, CategoryCard] = {}
+        self.rows: dict[str, CategoryRow] = {}
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(28, 24, 28, 24)
-        lay.setSpacing(14)
+        lay.setContentsMargins(16, 12, 16, 8)
+        lay.setSpacing(8)
 
         title = QLabel(t("clean.title"))
         title.setObjectName("pageTitle")
@@ -48,19 +119,17 @@ class CleanPage(QWidget):
         self.all_btn.clicked.connect(lambda: self.toggle_all(True))
         self.none_btn = QPushButton(t("btn.none"))
         self.none_btn.clicked.connect(lambda: self.toggle_all(False))
-        self.analyze_btn = QPushButton(t("btn.refresh"))
-        self.analyze_btn.clicked.connect(self.host.controller.analyze)
-        self.winapp_btn = QPushButton(t("btn.winapp_rules"))
-        self.winapp_btn.clicked.connect(self._load_winapp)
         self.preview_btn = QPushButton(t("btn.preview"))
-        self.preview_btn.clicked.connect(self._preview)
+        self.preview_btn.clicked.connect(self.host.preview_clean)
+        self.winapp_btn = QPushButton(t("btn.winapp_rules"))
+        self.winapp_btn.clicked.connect(self.host.load_winapp_rules)
         self.cancel_btn = QPushButton(t("btn.cancel"))
-        self.cancel_btn.clicked.connect(self.host.controller.cancel)
+        self.cancel_btn.clicked.connect(self.host.request_cancel)
         self.clean_btn = QPushButton(t("btn.clean_selected"))
         self.clean_btn.setProperty("kind", "primary")
-        self.clean_btn.clicked.connect(self._confirm_and_clean)
-        for b in (self.all_btn, self.none_btn, self.analyze_btn,
-                  self.winapp_btn, self.preview_btn, self.cancel_btn):
+        self.clean_btn.clicked.connect(self.host.confirm_clean)
+        for b in (self.all_btn, self.none_btn, self.preview_btn,
+                  self.winapp_btn, self.cancel_btn):
             toolbar.addWidget(b)
         toolbar.addStretch(1)
         toolbar.addWidget(self.clean_btn)
@@ -72,123 +141,85 @@ class CleanPage(QWidget):
         self._list_host = QWidget()
         self._list_lay = QVBoxLayout(self._list_host)
         self._list_lay.setContentsMargins(0, 0, 6, 0)
-        self._list_lay.setSpacing(8)
+        self._list_lay.setSpacing(6)
         self._list_lay.addStretch(1)
         scroll.setWidget(self._list_host)
         lay.addWidget(scroll, 1)
 
         # ---------------------------------------------------------- footer
         footer = QHBoxLayout()
+        footer.setSpacing(12)
         self.total_lbl = QLabel(t("clean.total_calculating"))
-        self.total_lbl.setObjectName("cardTitle")
+        self.total_lbl.setStyleSheet(
+            "font-size: 13px; font-weight: 600; background: transparent;")
         footer.addWidget(self.total_lbl)
-        footer.addStretch(1)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 1000)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(False)
+        footer.addWidget(self.progress, 1)
         self.status_lbl = QLabel(t("status.ready"))
         self.status_lbl.setObjectName("statusText")
         footer.addWidget(self.status_lbl)
         lay.addLayout(footer)
 
-        self._build_cards()
+        self._build_rows()
         self.on_busy(False)
 
     # ----------------------------------------------------------- helpers
 
-    def _build_cards(self) -> None:
-        """(Re)build one card per category from the current results."""
+    def _build_rows(self) -> None:
+        """(Re)build one row per category from host.categories."""
         while self._list_lay.count() > 1:
             item = self._list_lay.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.deleteLater()
-        self._cards = {}
-        for result in self.host.controller.get_results():
-            card = CategoryCard(result)
-            card.toggled.connect(lambda _k, _on: self.update_total())
-            self._list_lay.insertWidget(self._list_lay.count() - 1, card)
-            self._cards[result.key] = card
+        self.rows = {}
+        for cat in self.host.categories:
+            row = CategoryRow(cat)
+            row.toggled.connect(lambda _k, _on: self.update_total())
+            self._list_lay.insertWidget(self._list_lay.count() - 1, row)
+            self.rows[cat.key] = row
 
     def toggle_all(self, value: bool) -> None:
-        for card in self._cards.values():
-            card.set_checked(value)
+        for row in self.rows.values():
+            row.set_checked(value)
         self.update_total()
 
-    def selected(self) -> list[CategoryResult]:
-        """The checked categories as result rows."""
-        by_key = {r.key: r for r in self.host.controller.get_results()}
-        return [by_key[k] for k, card in self._cards.items()
-                if card.is_checked() and k in by_key]
+    def selected_categories(self):
+        """The checked category objects."""
+        by_key = {c.key: c for c in self.host.categories}
+        return [by_key[k] for k, row in self.rows.items()
+                if row.is_checked() and k in by_key]
 
     def update_total(self) -> None:
-        total = sum(r.size for r in self.selected())
+        total = sum(c.size for c in self.selected_categories())
         self.total_lbl.setText(t("clean.total", size=format_size(total)))
 
     def on_category_updated(self, key: str) -> None:
-        card = self._cards.get(key)
-        if card is None:
+        """Refresh one category's row as soon as its scan finishes."""
+        row = self.rows.get(key)
+        if row is None:
             return
-        by_key = {r.key: r for r in self.host.controller.get_results()}
-        result = by_key.get(key)
-        if result is not None:
-            card.set_result(result)
+        by_key = {c.key: c for c in self.host.categories}
+        cat = by_key.get(key)
+        if cat is not None:
+            row.set_result(cat)
         self.update_total()
 
-    # ------------------------------------------------------------ actions
-
-    def _load_winapp(self) -> None:
-        path, _f = QFileDialog.getOpenFileName(
-            self, t("dialog.winapp_title"), "",
-            f"{t('dialog.winapp_filter')} (*.ini);;{t('dialog.all_files')} (*.*)")
-        if path:
-            self.host.controller.load_winapp_rules(path)
-
-    def _preview(self) -> None:
-        selected = self.selected()
-        if not selected:
-            self._flash_status(t("msg.no_categories"))
-            return
-        self.host.preview_flow([r.key for r in selected])
-
-    def on_preview_done(self, data) -> None:
-        """Show the collected preview in a dialog (already off the UI
-        thread; the snapshot for the upcoming clean was taken too)."""
-        labels = {r.key: r.label for r in self.host.controller.get_results()}
-        sections = [(labels.get(key, key), files, scanned)
-                    for key, files, scanned in data]
-        dlg = PreviewDialog(sections, self)
-        dlg.exec()
-
-    def on_preview_error(self, message: str) -> None:
-        self._flash_status(f"{t('msg.preview_error', exc=message)}")
-
-    def _confirm_and_clean(self) -> None:
-        selected = self.selected()
-        if not selected:
-            self._flash_status(t("msg.no_categories"))
-            return
-        if self.host.settings.confirm_before_clean:
-            total = sum(r.size for r in selected)
-            needs_admin = any(r.needs_admin for r in selected)
-            includes_recycle = any(r.recycle_bin for r in selected)
-            dlg = ConfirmCleanDialog(selected, total, needs_admin,
-                                     includes_recycle, self)
-            if not dlg.exec():
-                return
-        self.host.controller.clean([r.key for r in selected])
+    def update_after_scan(self, cat) -> None:
+        """Alias used by the app after each category scan."""
+        self.on_category_updated(cat.key)
 
     # ------------------------------------------------------------- state
 
     def on_busy(self, busy: bool) -> None:
         """Disable everything except Cancel while an operation runs."""
-        for b in (self.all_btn, self.none_btn, self.analyze_btn,
-                  self.winapp_btn, self.preview_btn, self.clean_btn):
+        for b in (self.all_btn, self.none_btn, self.preview_btn,
+                  self.winapp_btn, self.clean_btn):
             b.setEnabled(not busy)
         self.cancel_btn.setEnabled(busy)
 
-    def _flash_status(self, text: str) -> None:
-        self.status_lbl.setText(text)
-
     def on_show(self) -> None:
         self.update_total()
-
-    def set_status(self, text: str) -> None:
-        self.status_lbl.setText(text)

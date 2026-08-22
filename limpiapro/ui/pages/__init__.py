@@ -1,8 +1,11 @@
-"""Pages of the PySide6 interface (Inicio, Limpieza, Resultados, Config)."""
+"""PySide6 pages package (replica of the legacy interface)."""
 
 from .clean_page import CleanPage
-from .home_page import HomePage
-from .results_page import ResultsPage
-from .settings_page import SettingsPage
+from .duplicates_page import DuplicatePage
+from .log_page import LogPage
+from .startup_page import StartupPage
+from .uninstall_page import UninstallPage
+from .update_page import UpdatePage
 
-__all__ = ["CleanPage", "HomePage", "ResultsPage", "SettingsPage"]
+__all__ = ["CleanPage", "DuplicatePage", "LogPage", "StartupPage",
+           "UninstallPage", "UpdatePage"]

@@ -1,7 +1,9 @@
-/* LimpiaPro PySide6 stylesheet.
+/* LimpiaPro PySide6 replica stylesheet (legacy customtkinter look).
    Color tokens are substituted at runtime by limpiapro/ui/theme.py:
-   %BG% %SIDEBAR% %CARD% %CARD_HOVER% %BORDER% %TEXT% %MUTED% %FAINT%
-   %INPUT% %ACCENT% %ACCENT_HOVER% */
+   %BG% %SIDEBAR% %CARD% %CARD_ALT% %CARD_HOVER% %BORDER% %TEXT% %MUTED%
+   %FAINT% %INPUT% %CONSOLE% %SUCCESS% %SUCCESS_TEXT% %WARNING% %ERROR%
+   %ERROR_SOFT% %ERROR_SOFT_HOVER% %ERROR_BORDER% %WARNING_SOFT%
+   %WARNING_SOFT_HOVER% %WARNING_BORDER% %ACCENT% %ACCENT_HOVER% */
 
 * {
     outline: none;
@@ -22,15 +24,9 @@ QFrame#sidebar {
 }
 
 QLabel#appLogo {
-    font-size: 22px;
-    font-weight: 600;
+    font-size: 18px;
+    font-weight: 700;
     color: %TEXT%;
-    background: transparent;
-}
-
-QLabel#appVersion {
-    color: %FAINT%;
-    font-size: 11px;
     background: transparent;
 }
 
@@ -38,9 +34,9 @@ QPushButton#navButton {
     background: transparent;
     border: none;
     border-radius: 8px;
-    padding: 9px 12px;
+    padding: 8px 12px;
     text-align: left;
-    color: %MUTED%;
+    color: %TEXT%;
     font-size: 13px;
 }
 
@@ -54,43 +50,7 @@ QPushButton#navButton:checked {
     font-weight: 600;
 }
 
-/* -------------------------------------------------------------- cards */
-
-QFrame#card {
-    background-color: %CARD%;
-    border: 1px solid %BORDER%;
-    border-radius: 10px;
-}
-
-QFrame#card:hover {
-    border-color: %FAINT%;
-}
-
-QLabel#cardTitle {
-    font-size: 14px;
-    font-weight: 600;
-    color: %TEXT%;
-    background: transparent;
-}
-
-QLabel#cardDesc {
-    font-size: 11px;
-    color: %MUTED%;
-    background: transparent;
-}
-
-QLabel#cardSize {
-    font-size: 13px;
-    font-weight: 600;
-    color: %SUCCESS%;
-    background: transparent;
-}
-
-QLabel#cardFiles {
-    font-size: 10px;
-    color: %FAINT%;
-    background: transparent;
-}
+/* ------------------------------------------------------------ headers */
 
 QLabel#pageTitle {
     font-size: 20px;
@@ -105,15 +65,7 @@ QLabel#pageSubtitle {
     background: transparent;
 }
 
-QLabel#statValue {
-    font-size: 24px;
-    font-weight: 700;
-    color: %TEXT%;
-    background: transparent;
-}
-
-QLabel#statLabel {
-    font-size: 11px;
+QLabel#mutedText {
     color: %MUTED%;
     background: transparent;
 }
@@ -124,12 +76,41 @@ QLabel#statusText {
 }
 
 QLabel#successText {
-    color: %SUCCESS%;
+    color: %SUCCESS_TEXT%;
     background: transparent;
 }
 
-QLabel#errorText {
-    color: %ERROR%;
+/* ----------------------------------------------------- category rows */
+
+QWidget#catRow {
+    background-color: %CARD_ALT%;
+    border: 1px solid %BORDER%;
+    border-radius: 10px;
+}
+
+QLabel#catTitle {
+    font-size: 14px;
+    font-weight: 600;
+    color: %TEXT%;
+    background: transparent;
+}
+
+QLabel#catDesc {
+    font-size: 11px;
+    color: %MUTED%;
+    background: transparent;
+}
+
+QLabel#catSize {
+    font-size: 13px;
+    font-weight: 600;
+    color: %SUCCESS_TEXT%;
+    background: transparent;
+}
+
+QLabel#catCount {
+    font-size: 10px;
+    color: %FAINT%;
     background: transparent;
 }
 
@@ -138,8 +119,8 @@ QLabel#errorText {
 QPushButton {
     background-color: %INPUT%;
     border: 1px solid %BORDER%;
-    border-radius: 8px;
-    padding: 8px 14px;
+    border-radius: 6px;
+    padding: 7px 14px;
     color: %TEXT%;
 }
 
@@ -148,7 +129,7 @@ QPushButton:hover {
 }
 
 QPushButton:pressed {
-    background-color: %SIDEBAR%;
+    background-color: %CARD%;
 }
 
 QPushButton:disabled {
@@ -169,12 +150,6 @@ QPushButton[kind="primary"]:hover {
     border-color: %ACCENT_HOVER%;
 }
 
-QPushButton[kind="primary"]:disabled {
-    background-color: %INPUT%;
-    border-color: %INPUT%;
-    color: %FAINT%;
-}
-
 QPushButton[kind="danger"] {
     background-color: %ERROR_SOFT%;
     border: 1px solid %ERROR_BORDER%;
@@ -183,6 +158,26 @@ QPushButton[kind="danger"] {
 
 QPushButton[kind="danger"]:hover {
     background-color: %ERROR_SOFT_HOVER%;
+}
+
+QPushButton[kind="warning"] {
+    background-color: %WARNING_SOFT%;
+    border: 1px solid %WARNING_BORDER%;
+    color: %WARNING%;
+}
+
+QPushButton[kind="warning"]:hover {
+    background-color: %WARNING_SOFT_HOVER%;
+}
+
+QPushButton[kind="success"] {
+    background-color: %SUCCESS%;
+    border: 1px solid %SUCCESS%;
+    color: #ffffff;
+}
+
+QPushButton[kind="success"]:hover {
+    background-color: %SUCCESS%;
 }
 
 /* ------------------------------------------------------------ checkbox */
@@ -209,7 +204,7 @@ QCheckBox::indicator:checked {
     border-color: %ACCENT%;
 }
 
-/* ----------------------------------------------------------- progress */
+/* ------------------------------------------------------------ progress */
 
 QProgressBar {
     border: none;
@@ -225,7 +220,7 @@ QProgressBar::chunk {
     background-color: %ACCENT%;
 }
 
-/* ------------------------------------------------------------- scroll */
+/* -------------------------------------------------------------- scroll */
 
 QScrollArea {
     border: none;
@@ -273,37 +268,62 @@ QTreeWidget {
     background-color: %CARD%;
     alternate-background-color: %CARD_ALT%;
     border: 1px solid %BORDER%;
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 4px;
     color: %TEXT%;
+    show-decoration-selected: 0;
 }
 
 QTreeWidget::item {
-    padding: 6px 4px;
-    border-radius: 6px;
+    padding: 4px 2px;
 }
 
 QTreeWidget::item:selected {
-    background-color: %INPUT%;
-    color: %TEXT%;
+    background-color: %ACCENT%;
+    color: #ffffff;
 }
 
 QHeaderView::section {
-    background-color: %INPUT%;
+    background-color: %SIDEBAR%;
     color: %MUTED%;
     border: none;
     border-bottom: 1px solid %BORDER%;
-    padding: 6px 8px;
+    padding: 5px 8px;
     font-weight: 600;
+}
+
+/* ---------------------------------------------------------------- tabs */
+
+QTabWidget::pane {
+    border: 1px solid %BORDER%;
+    border-radius: 6px;
+    top: -1px;
+}
+
+QTabBar::tab {
+    background: transparent;
+    color: %MUTED%;
+    padding: 7px 14px;
+    border: none;
+    border-bottom: 2px solid transparent;
+}
+
+QTabBar::tab:selected {
+    color: %TEXT%;
+    border-bottom: 2px solid %ACCENT%;
+}
+
+QTabBar::tab:hover {
+    color: %TEXT%;
 }
 
 /* ------------------------------------------------------------- inputs */
 
 QComboBox, QLineEdit {
-    background-color: %CARD%;
+    background-color: %INPUT%;
     border: 1px solid %BORDER%;
-    border-radius: 8px;
-    padding: 7px 10px;
+    border-radius: 6px;
+    padding: 6px 10px;
     color: %TEXT%;
 }
 
@@ -312,41 +332,25 @@ QComboBox:hover, QLineEdit:hover {
 }
 
 QComboBox QAbstractItemView {
-    background-color: %CARD%;
+    background-color: %INPUT%;
     border: 1px solid %BORDER%;
     selection-background-color: %ACCENT%;
     selection-color: #ffffff;
 }
 
-QToolTip {
-    background-color: %CARD%;
-    color: %TEXT%;
-    border: 1px solid %BORDER%;
-    padding: 4px 8px;
-}
-
-/* -------------------------------------------------------------- misc */
-
-QGroupBox {
-    border: 1px solid %BORDER%;
-    border-radius: 8px;
-    margin-top: 12px;
-    padding-top: 8px;
-    color: %MUTED%;
-    font-weight: 600;
-}
-
-QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 12px;
-    padding: 0 4px;
-}
-
 QPlainTextEdit {
-    background-color: %SIDEBAR%;
+    background-color: %CONSOLE%;
     border: 1px solid %BORDER%;
-    border-radius: 8px;
+    border-radius: 6px;
     color: %MUTED%;
     font-family: "Consolas";
     font-size: 12px;
+    padding: 4px;
+}
+
+QToolTip {
+    background-color: %INPUT%;
+    color: %TEXT%;
+    border: 1px solid %BORDER%;
+    padding: 4px 8px;
 }

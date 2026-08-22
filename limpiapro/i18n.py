@@ -212,6 +212,10 @@ _STRINGS = {
         "msg.disable_startup": ("Desactivar el inicio de:\n\n  {name}\n\nSe "
                                 "movera a la lista de desactivadas y podras "
                                 "reactivarla despues."),
+        "startup.runonce_warning": ("ADVERTENCIA: esta es una entrada de "
+                                    "ejecucion unica (RunOnce).\n\nSi la "
+                                    "desactivas, puede que nunca se ejecute."),
+        "startup.runonce_confirm": "Estas seguro de que quieres desactivar '{name}'?",
         "log.startup_disabled": "Desactivada app de inicio: {name}",
         "status.startup_disabled": "App de inicio desactivada: {name}",
         "status.startup_disable_error": "Error al desactivar",
@@ -531,6 +535,10 @@ _STRINGS = {
         "msg.disable_startup": ("Disable startup of:\n\n  {name}\n\nIt will "
                                 "be moved to the disabled list and can be "
                                 "re-enabled later."),
+        "startup.runonce_warning": ("WARNING: this is a one-time (RunOnce) "
+                                    "entry.\n\nIf you disable it, it may "
+                                    "never run."),
+        "startup.runonce_confirm": "Are you sure you want to disable '{name}'?",
         "log.startup_disabled": "Startup app disabled: {name}",
         "status.startup_disabled": "Startup app disabled: {name}",
         "status.startup_disable_error": "Error disabling",

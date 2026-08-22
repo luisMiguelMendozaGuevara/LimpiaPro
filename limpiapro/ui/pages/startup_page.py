@@ -1,0 +1,461 @@
+"""Page: Startup manager (startup apps, scheduled tasks, processes)
+(replica of the legacy startup page).
+
+Three sub-tabs in a QTabWidget, each following the same pattern: a
+worker gathers data off the UI thread via run_async, the done-callback
+fills the tree in batches, and every entry point respects the global
+host.busy guard. Startup app icons come from the native QFileIconProvider
+(the legacy extracted them with GDI+ on a worker)."""
+
+from __future__ import annotations
+
+import os
+
+from PySide6.QtCore import QFileInfo
+from PySide6.QtWidgets import (
+    QDialog,
+    QFileIconProvider,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ... import APP_NAME
+from ...i18n import t
+from ...processes import get_processes, is_protected, kill_process
+from ...startup import get_disabled_startup, get_startup_apps, is_runonce_entry, set_startup
+from ...tasks import get_scheduled_tasks, set_task_enabled
+from ..theme import GREEN_TEXT, ORANGE
+from ..widgets import fill_tree, make_tree, run_async, selected_many, selected_one
+
+_ICON_PROVIDER = QFileIconProvider()
+
+
+def _command_exe(command: str) -> str:
+    """Best-effort executable path from a command line (for the icon)."""
+    cmd = (command or "").strip()
+    if not cmd:
+        return ""
+    if cmd.startswith('"'):
+        return cmd.split('"')[1]
+    return cmd.split()[0]
+
+
+class StartupPage(QWidget):
+    """Startup apps, scheduled tasks and running processes manager."""
+
+    def __init__(self, host, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.host = host
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 12, 16, 8)
+        lay.setSpacing(8)
+
+        title = QLabel(t("startup.title"))
+        title.setObjectName("pageTitle")
+        lay.addWidget(title)
+        subtitle = QLabel(t("startup.subtitle"))
+        subtitle.setObjectName("pageSubtitle")
+        lay.addWidget(subtitle)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_startup_tab(), t("tab.startup_apps"))
+        self.tabs.addTab(self._build_tasks_tab(), t("tab.tasks"))
+        self.tabs.addTab(self._build_processes_tab(), t("tab.processes"))
+        lay.addWidget(self.tabs, 1)
+
+    # ------------------------------------------------------ startup apps
+
+    def _build_startup_tab(self) -> QWidget:
+        tab = QWidget()
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(6)
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+        self.startup_refresh_btn = QPushButton(t("btn.refresh"))
+        self.startup_refresh_btn.clicked.connect(self.refresh_startup)
+        self.startup_disable_btn = QPushButton(t("btn.disable_selected"))
+        self.startup_disable_btn.setProperty("kind", "warning")
+        self.startup_disable_btn.clicked.connect(self.disable_startup_selected)
+        reenable_btn = QPushButton(t("btn.reenable"))
+        reenable_btn.clicked.connect(self.show_disabled_startup)
+        toolbar.addWidget(self.startup_refresh_btn)
+        toolbar.addWidget(self.startup_disable_btn)
+        toolbar.addWidget(reenable_btn)
+        toolbar.addStretch(1)
+        lay.addLayout(toolbar)
+
+        self.startup_tree = make_tree(
+            self,
+            [
+                ("#0", t("col.name"), 260),
+                ("src", t("col.source"), 160),
+                ("cmd", t("col.command"), 420),
+            ],
+        )
+        lay.addWidget(self.startup_tree, 1)
+        self.startup_data = []
+        return tab
+
+    def refresh_startup(self) -> None:
+        if self.host.busy:
+            return
+        self.host.set_busy(True, mode="indeterminate")
+        run_async(self, self._startup_worker, self._startup_done,
+                  on_error=lambda exc: self._generic_error(
+                      t("area.startup"), exc))
+
+    def _startup_worker(self):
+        """Gather startup entries off the UI thread."""
+        return (get_startup_apps(),)
+
+    def _startup_done(self, data) -> None:
+        self.host.set_busy(False)
+        self.startup_data = data
+        specs = []
+        for i, e in enumerate(data):
+            exe = _command_exe(e["command"])
+            icon = None
+            if exe and os.path.exists(exe):
+                icon = _ICON_PROVIDER.icon(QFileInfo(exe))
+            kw = {"index": i}
+            if icon is not None:
+                kw["icon"] = icon
+            specs.append((e["name"], (e["source"], e["command"]), kw))
+        fill_tree(self.startup_tree, specs)
+        self.host.log(t("log.startup_loaded", n=len(self.startup_data)))
+
+    def disable_startup_selected(self) -> None:
+        entry = selected_one(self.startup_tree, self.startup_data)
+        if entry is None:
+            return
+        if is_runonce_entry(entry):
+            msg = (f"\u26A0 {t('startup.runonce_warning')}\n\n"
+                   f"{t('startup.runonce_confirm', name=entry['name'])}")
+            if QMessageBox.question(self, APP_NAME, msg,
+                                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                return
+        else:
+            if QMessageBox.question(
+                    self, APP_NAME, t("msg.disable_startup",
+                                      name=entry["name"]),
+                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                return
+        self.host.set_busy(True, mode="indeterminate")
+        run_async(self, self._disable_startup_worker, self._disable_startup_done,
+                  (entry,))
+
+    def _disable_startup_worker(self, entry):
+        ok, msg = set_startup(entry, False)
+        return ok, msg, entry
+
+    def _disable_startup_done(self, ok, msg, entry) -> None:
+        self.host.set_busy(False)
+        if ok:
+            self.host.log(t("log.startup_disabled", name=entry["name"]))
+            self.host.set_status(t("status.startup_disabled", name=entry["name"]))
+        else:
+            self.host.set_status(t("status.startup_disable_error"))
+            self.host.log(t("log.startup_disable_error",
+                            name=entry["name"], msg=msg))
+            QMessageBox.critical(self, APP_NAME,
+                                 t("msg.startup_disable_error", msg=msg))
+        self.refresh_startup()
+
+    def show_disabled_startup(self) -> None:
+        if self.host.busy:
+            return
+        self.host.set_busy(True, mode="indeterminate")
+        run_async(self, self._disabled_worker, self._disabled_done,
+                  on_error=lambda exc: self._generic_error(
+                      t("area.disabled"), exc))
+
+    def _disabled_worker(self):
+        return (get_disabled_startup(),)
+
+    def _disabled_done(self, disabled) -> None:
+        self.host.set_busy(False)
+        if not disabled:
+            QMessageBox.information(self, APP_NAME, t("msg.no_disabled"))
+            return
+        win = QDialog(self)
+        win.setWindowTitle(t("title.reattach"))
+        win.resize(640, 420)
+        lay = QVBoxLayout(win)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(8)
+        lbl = QLabel(t("startup.reattach_label"))
+        lbl.setObjectName("pageTitle")
+        lay.addWidget(lbl)
+        tree = make_tree(win, [("#0", t("col.name"), 240),
+                               ("cmd", t("col.cmd_file"), 360)])
+        specs = [
+            (e["name"], (e["command"] or e.get("filename", "")), {"index": i})
+            for i, e in enumerate(disabled)
+        ]
+        fill_tree(tree, specs)
+        lay.addWidget(tree, 1)
+
+        def _re() -> None:
+            sel = selected_many(tree, disabled)
+            if not sel:
+                return
+            self.host.set_busy(True, mode="indeterminate")
+            run_async(self, self._reenable_worker, self._reenable_done,
+                      (sel, win))
+
+        btn = QPushButton(t("btn.reenable_selected"))
+        btn.setProperty("kind", "success")
+        btn.clicked.connect(_re)
+        h = QHBoxLayout()
+        h.addStretch(1)
+        h.addWidget(btn)
+        lay.addLayout(h)
+        win.exec()
+
+    def _reenable_worker(self, entries, win):
+        results = []
+        for entry in entries:
+            ok, msg = set_startup(entry, True)
+            results.append((entry["name"], ok, msg))
+        return results, win
+
+    def _reenable_done(self, results, win) -> None:
+        self.host.set_busy(False)
+        for name, ok, msg in results:
+            if ok:
+                self.host.log(t("log.startup_enabled", name=name))
+            else:
+                self.host.log(t("log.startup_enable_error", name=name, msg=msg))
+        win.accept()
+        self.refresh_startup()
+
+    def on_busy(self, busy: bool) -> None:
+        for b in (self.startup_refresh_btn, self.startup_disable_btn,
+                  self.tasks_refresh_btn, self.tasks_disable_btn,
+                  self.tasks_enable_btn, self.proc_refresh_btn, self.kill_btn):
+            b.setEnabled(not busy)
+
+    # -------------------------------------------------- scheduled tasks
+
+    def _build_tasks_tab(self) -> QWidget:
+        tab = QWidget()
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(6)
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+        self.tasks_refresh_btn = QPushButton(t("btn.refresh"))
+        self.tasks_refresh_btn.clicked.connect(self.refresh_tasks)
+        self.tasks_disable_btn = QPushButton(t("btn.disable"))
+        self.tasks_disable_btn.setProperty("kind", "warning")
+        self.tasks_disable_btn.clicked.connect(lambda: self._toggle_task(False))
+        self.tasks_enable_btn = QPushButton(t("btn.enable"))
+        self.tasks_enable_btn.setProperty("kind", "success")
+        self.tasks_enable_btn.clicked.connect(lambda: self._toggle_task(True))
+        self.tasks_info = QLabel("")
+        self.tasks_info.setObjectName("mutedText")
+        toolbar.addWidget(self.tasks_refresh_btn)
+        toolbar.addWidget(self.tasks_disable_btn)
+        toolbar.addWidget(self.tasks_enable_btn)
+        toolbar.addStretch(1)
+        toolbar.addWidget(self.tasks_info)
+        lay.addLayout(toolbar)
+
+        self.tasks_tree = make_tree(
+            self,
+            [
+                ("#0", t("col.task"), 300),
+                ("status", t("col.status"), 90, "center"),
+                ("sched", t("col.schedule"), 130, "center"),
+                ("next", t("col.next_run"), 180),
+            ],
+        )
+        lay.addWidget(self.tasks_tree, 1)
+        self.tasks_data = []
+        return tab
+
+    def refresh_tasks(self) -> None:
+        if self.host.busy:
+            return
+        self.host.set_busy(True, mode="indeterminate")
+        run_async(self, self._refresh_tasks_worker, self._refresh_tasks_done,
+                  on_error=lambda exc: self._generic_error(
+                      t("area.tasks"), exc))
+
+    def _refresh_tasks_worker(self):
+        return (get_scheduled_tasks(),)
+
+    def _refresh_tasks_done(self, tasks) -> None:
+        self.host.set_busy(False)
+        self.tasks_data = tasks
+        enabled = 0
+        disabled = 0
+        specs = []
+        for i, task in enumerate(tasks):
+            state = task.get("scheduled") or task.get("status", "")
+            is_disabled = "disabled" in state.lower()
+            if is_disabled:
+                disabled += 1
+            else:
+                enabled += 1
+            specs.append(
+                (task["name"],
+                 (state, task.get("status", ""), task.get("next", "")),
+                 {"index": i,
+                  "fg": ORANGE if is_disabled else GREEN_TEXT}))
+        fill_tree(self.tasks_tree, specs)
+        self.tasks_info.setText(
+            t("startup.tasks_count", n=enabled, m=disabled))
+        self.host.log(t("log.tasks_loaded", n=len(tasks)))
+
+    def _toggle_task(self, enable: bool) -> None:
+        task = selected_one(self.tasks_tree, self.tasks_data)
+        if task is None:
+            return
+        key = "msg.task_enable_q" if enable else "msg.task_disable_q"
+        if QMessageBox.question(self, APP_NAME, t(key, name=task["name"]),
+                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        self.host.set_busy(True, mode="indeterminate")
+        run_async(self, self._toggle_task_worker, self._toggle_task_done,
+                  (task["name"], enable))
+
+    def _toggle_task_worker(self, name, enable):
+        ok, msg = set_task_enabled(name, enable)
+        return ok, msg, name, enable
+
+    def _toggle_task_done(self, ok, msg, name, enable) -> None:
+        self.host.set_busy(False)
+        key = "status.task_enabled" if enable else "status.task_disabled"
+        logkey = "log.task_enabled" if enable else "log.task_disabled"
+        if ok:
+            self.host.log(t(logkey, name=name))
+            self.host.set_status(t(key, name=name))
+        else:
+            self.host.set_status(t("status.task_error"))
+            self.host.log(t("log.task_error", name=name, msg=msg))
+            QMessageBox.critical(self, APP_NAME, t("msg.task_error", msg=msg))
+        self.refresh_tasks()
+
+    # --------------------------------------------------------- processes
+
+    def _build_processes_tab(self) -> QWidget:
+        tab = QWidget()
+        lay = QVBoxLayout(tab)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(6)
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+        self.proc_refresh_btn = QPushButton(t("btn.refresh"))
+        self.proc_refresh_btn.clicked.connect(self.refresh_processes)
+        self.kill_btn = QPushButton(t("btn.end_process"))
+        self.kill_btn.setProperty("kind", "danger")
+        self.kill_btn.clicked.connect(self.kill_selected)
+        self.proc_search = QLineEdit()
+        self.proc_search.setPlaceholderText(t("startup.search_placeholder"))
+        self.proc_search.setMaximumWidth(220)
+        filter_btn = QPushButton(t("btn.filter"))
+        filter_btn.clicked.connect(self.refresh_processes)
+        toolbar.addWidget(self.proc_refresh_btn)
+        toolbar.addWidget(self.kill_btn)
+        toolbar.addStretch(1)
+        toolbar.addWidget(filter_btn)
+        toolbar.addWidget(self.proc_search)
+        lay.addLayout(toolbar)
+
+        self.proc_tree = make_tree(
+            self,
+            [
+                ("#0", t("col.process"), 260),
+                ("pid", "PID", 70, "center"),
+                ("session", t("col.session"), 80, "center"),
+                ("mem", t("col.memory"), 90, "e"),
+                ("user", t("col.user"), 160),
+            ],
+        )
+        lay.addWidget(self.proc_tree, 1)
+        self.proc_data = []
+        return tab
+
+    def refresh_processes(self) -> None:
+        if self.host.busy:
+            return
+        self.host.set_busy(True, mode="indeterminate")
+        run_async(self, self._refresh_processes_worker,
+                  self._refresh_processes_done,
+                  on_error=lambda exc: self._generic_error(
+                      t("area.processes"), exc))
+
+    def _refresh_processes_worker(self):
+        return (get_processes(),)
+
+    def _refresh_processes_done(self, procs) -> None:
+        self.host.set_busy(False)
+        self.proc_data = procs
+        search = self.proc_search.text().strip().lower()
+        specs = []
+        count = 0
+        for i, p in enumerate(procs):
+            if search and search not in p["name"].lower():
+                continue
+            count += 1
+            specs.append((p["name"],
+                          (p["pid"], p["session"], p["mem"], p["user"]),
+                          {"index": i}))
+        fill_tree(self.proc_tree, specs)
+        self.host.log(t("log.processes_shown", n=count))
+
+    def _generic_error(self, area, exc) -> None:
+        self.host.set_busy(False)
+        self.host.set_status(t("status.load_error", area=area))
+        self.host.log(t("log.load_error", area=area, exc=exc))
+        QMessageBox.critical(self, APP_NAME,
+                             t("msg.load_error", area=area, exc=exc))
+
+    def kill_selected(self) -> None:
+        items = self.proc_tree.selectedItems()
+        if not items:
+            QMessageBox.information(self, APP_NAME, t("msg.select_process"))
+            return
+        item = items[0]
+        pid = item.text(1)
+        name = item.text(0)
+        if is_protected(name):
+            QMessageBox.information(self, APP_NAME,
+                                    t("msg.process_protected", name=name))
+            return
+        if QMessageBox.question(
+                self, APP_NAME, t("msg.kill_process", name=name, pid=pid),
+                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        self.host.set_busy(True, mode="indeterminate")
+        run_async(self, self._kill_worker, self._kill_done, (pid, name))
+
+    def _kill_worker(self, pid, name):
+        ok, msg = kill_process(pid, name=name)
+        return ok, msg, name
+
+    def _kill_done(self, ok, msg, name) -> None:
+        self.host.set_busy(False)
+        if ok:
+            self.host.log(t("log.process_killed", name=name))
+            self.host.set_status(t("status.process_killed", name=name))
+        else:
+            self.host.set_status(t("status.process_error"))
+            self.host.log(t("log.process_error", name=name, msg=msg))
+            QMessageBox.critical(self, APP_NAME, t("msg.process_error", msg=msg))
+        self.refresh_processes()
+
+    def on_show(self) -> None:
+        pass
