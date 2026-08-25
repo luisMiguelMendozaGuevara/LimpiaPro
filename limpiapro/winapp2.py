@@ -552,16 +552,18 @@ def active_sections(sections) -> list[WinAppSection]:
 
 
 def default_winapp_file() -> str:
-    """Get the path of the bundled winapp2.ini next to the app.
-    
+    """Get the path of the bundled winapp2.ini inside the app bundle.
+
     Returns:
         str: Absolute path to the bundled winapp2.ini file.
-        
+
     Notes:
-        - Works both in development (next to limpiador.py) and packaged
-          (next to the executable).
+        - Works in development (project root) and packaged (PyInstaller's
+          _MEIPASS: the bundle carries its data, whatever folder the exe
+          lives in).
     """
-    return os.path.join(app_dir(), "winapp2.ini")
+    from .utils import data_dir
+    return os.path.join(data_dir(), "winapp2.ini")
 
 
 def parse_winapp_rules(path: str,

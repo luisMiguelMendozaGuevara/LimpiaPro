@@ -238,6 +238,23 @@ def app_dir() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def data_dir() -> str:
+    """Get the directory holding READ-ONLY bundled data (winapp2.ini, icons).
+
+    PyInstaller >= 6 unpacks spec `datas` into the `_internal` folder for
+    OneDir builds and into the extraction dir for one-file builds; both are
+    `sys._MEIPASS` at runtime. Looking bundled data up here (instead of
+    app_dir()) makes it impossible for the exe to lose its resources by
+    moving the folder or by the datas landing next to the exe.
+
+    Returns:
+        str: Absolute path to the bundled-data directory.
+    """
+    if getattr(sys, "frozen", False):
+        return getattr(sys, "_MEIPASS", app_dir())
+    return app_dir()
+
+
 def is_admin() -> bool:
     """Check if the process is running with elevated (UAC administrator) privileges.
     

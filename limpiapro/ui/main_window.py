@@ -156,11 +156,15 @@ class MainWindow(QMainWindow):
         logo_row = QHBoxLayout()
         logo_row.setSpacing(8)
         logo_icon = QLabel()
-        # The application (exe) icon, with the SVG broom as fallback.
-        from ..utils import app_dir
-        exe_icon_path = os.path.join(app_dir(), "assets", "limpiadora.ico")
-        if os.path.exists(exe_icon_path):
-            logo_icon.setPixmap(QIcon(exe_icon_path).pixmap(34, 34))
+        # The application (exe) icon, loaded from the bundle (never from a
+        # mutable external path): data_dir inside the frozen package, with
+        # the themed SVG broom as the permanent in-code fallback.
+        from ..utils import data_dir
+        exe_icon_path = os.path.join(data_dir(), "assets", "limpiadora.ico")
+        pm = QIcon(exe_icon_path).pixmap(34, 34) \
+            if os.path.exists(exe_icon_path) else None
+        if pm is not None and not pm.isNull():
+            logo_icon.setPixmap(pm)
         else:
             logo_icon.setPixmap(icons.pixmap("clean", 34, role="accent"))
         logo_icon.setFixedSize(38, 38)

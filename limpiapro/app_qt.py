@@ -116,12 +116,12 @@ def main() -> None:
 
     from .ui.main_window import MainWindow
     from .ui.theme import apply_theme
-    from .utils import app_dir
+    from .utils import data_dir
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)
-    icon_path = os.path.join(app_dir(), "assets", "limpiadora.ico")
+    icon_path = os.path.join(data_dir(), "assets", "limpiadora.ico")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
     apply_theme(app)
