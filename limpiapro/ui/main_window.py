@@ -1,15 +1,36 @@
 """LimpiaPro main window (PySide6 replica of the legacy CleanerApp).
 
-Sidebar navigation with the same six pages (Limpieza, Inicio, Duplicados,
-Windows Update, Desinstalar, Registro), a lazily built QStackedWidget and
-the same host surface the legacy pages used (busy, set_busy, set_status,
-log, categories, confirm_clean, ...). The clean-page flows run through
-the LimpiaProController workers; the other pages use run_async."""
+This module implements the main application window using PySide6. It
+replicates the look and feel of the legacy CustomTkinter interface while
+providing a modern, native Windows experience.
+
+Architecture:
+    - Sidebar navigation with six pages (Limpieza, Inicio, Duplicados,
+      Windows Update, Desinstalar, Registro).
+    - Lazily built QStackedWidget: pages are instantiated only when the
+      user navigates to them, reducing startup time.
+    - Host surface: exposes the same API the legacy pages used (busy,
+      set_busy, set_status, log, categories, confirm_clean, ...) so that
+      pages can be reused with minimal changes.
+    - Controller integration: clean-page flows run through the
+      LimpiaProController workers; other pages use run_async.
+
+Design Principles:
+1. Lazy Loading: Pages are built on-demand to minimize startup overhead.
+2. Separation of Concerns: The window manages layout and navigation;
+   business logic lives in the controller.
+3. Graceful Shutdown: Running operations are cooperatively cancelled
+   before the window closes.
+"""
 
 from __future__ import annotations
 
+import os
+import time
+from typing import TYPE_CHECKING
+
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -19,7 +40,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
-    QMessageBox,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -27,10 +47,10 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME, APP_VERSION
-from ..controller import CleanSummary, LimpiaProController
 from ..i18n import t
 from ..settings import Settings
 from ..utils import _errlog, format_size, is_admin
+from . import icons
 from . import theme as ui_theme
 from .pages import (
     CleanPage,
@@ -40,8 +60,12 @@ from .pages import (
     UninstallPage,
     UpdatePage,
 )
-from .widgets import readonly_toplevel
+from .widgets import app_info, readonly_toplevel, structured_confirm
 
+if TYPE_CHECKING:  # imported lazily at runtime; annotations only here
+    from ..controller import CleanSummary, LimpiaProController
+
+# Navigation configuration: (page_key, i18n_key)
 _NAV = [
     ("clean", "nav.clean"),
     ("startup", "nav.startup"),
@@ -53,38 +77,62 @@ _NAV = [
 
 
 class MainWindow(QMainWindow):
-    """Application window: sidebar navigation, pages and global state."""
+    """Application window: sidebar navigation, pages and global state.
+
+    This class serves as the central hub of the PySide6 interface. It
+    owns the controller, manages the page stack, and provides the host
+    API that pages use to interact with the application state.
+
+    Attributes:
+        settings (Settings): The application's user preferences.
+        controller (LimpiaProController): The MVC controller instance.
+        busy (bool): Global busy flag.
+        scanner: Legacy scanner reference (unused in PySide6).
+        _pages (dict): Cache of instantiated page widgets.
+        _closing (bool): Flag to prevent multiple close attempts.
+    """
 
     def __init__(self, settings: Settings | None = None,
                  controller: LimpiaProController | None = None):
+        """Initialize the MainWindow.
+
+        Args:
+            settings: Optional Settings instance. If None, loads from disk.
+            controller: Optional LimpiaProController. If None, creates a new one.
+        """
+        _t0 = time.perf_counter()
         super().__init__()
+        from ..controller import LimpiaProController as _LPC
         self.settings = (settings or Settings.load()).validate()
-        self.controller = controller or LimpiaProController()
+        self.controller = controller or _LPC()
         self.busy = False
         self.scanner = None
         self._pages: dict[str, QWidget] = {}
         self._closing = False
+        self._auto_analyze_done = False
 
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION} - {t('app.window_subtitle')}")
         self.resize(1000, 680)
         self.setMinimumSize(860, 560)
 
         self._build_ui()
+        _errlog(f"qt: ui built in {time.perf_counter() - _t0:.3f}s")
         self._wire_controller()
         ui_theme.apply_mica_backdrop(self)
         self.apply_theme()
         self.show_page("clean")
+        _errlog(f"qt: window ready in {time.perf_counter() - _t0:.3f}s")
 
         self.log(t("log.started_admin" if is_admin() else "log.started_no_admin",
                    app=APP_NAME, ver=APP_VERSION))
-        if self.settings.auto_analyze:
-            # Deferred so the window paints before the scan starts.
-            QTimer.singleShot(300, self.analyze_all)
+        # The first analysis starts after the window paints (showEvent),
+        # never blocking the first frame.
         _errlog("qt: window created")
 
     # ------------------------------------------------------------- layout
 
     def _build_ui(self) -> None:
+        """Construct the main UI layout: sidebar + page stack."""
         central = QWidget()
         root = QHBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
@@ -97,6 +145,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def _build_sidebar(self) -> QFrame:
+        """Construct the navigation sidebar with logo, nav buttons, and theme toggle."""
         frame = QFrame()
         frame.setObjectName("sidebar")
         frame.setFixedWidth(200)
@@ -104,9 +153,24 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(10, 16, 10, 14)
         lay.setSpacing(4)
 
-        logo = QLabel(f"\U0001F9F9  {APP_NAME}")
+        logo_row = QHBoxLayout()
+        logo_row.setSpacing(8)
+        logo_icon = QLabel()
+        # The application (exe) icon, with the SVG broom as fallback.
+        from ..utils import app_dir
+        exe_icon_path = os.path.join(app_dir(), "assets", "limpiadora.ico")
+        if os.path.exists(exe_icon_path):
+            logo_icon.setPixmap(QIcon(exe_icon_path).pixmap(34, 34))
+        else:
+            logo_icon.setPixmap(icons.pixmap("clean", 34, role="accent"))
+        logo_icon.setFixedSize(38, 38)
+        logo_icon.setAlignment(Qt.AlignCenter)
+        logo_row.addWidget(logo_icon)
+        logo = QLabel(APP_NAME)
         logo.setObjectName("appLogo")
-        lay.addWidget(logo)
+        logo_row.addWidget(logo)
+        logo_row.addStretch(1)
+        lay.addLayout(logo_row)
         lay.addSpacing(10)
 
         self.nav_buttons: dict[str, QPushButton] = {}
@@ -117,6 +181,8 @@ class MainWindow(QMainWindow):
             btn.setObjectName("navButton")
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
+            btn.setIcon(icons.nav(icons.NAV_ICONS[key]))
+            btn.setIconSize(icons.icon_size())
             btn.clicked.connect(lambda _=False, k=key: self.show_page(k))
             group.addButton(btn)
             lay.addWidget(btn)
@@ -133,21 +199,48 @@ class MainWindow(QMainWindow):
         return frame
 
     def _on_theme_toggled(self, dark: bool) -> None:
+        """Handle theme toggle changes."""
         self.settings.theme = "dark" if dark else "light"
         self.settings.save()
         self.apply_theme()
 
     def apply_theme(self) -> None:
+        """Apply the current theme and refresh every themed icon."""
         theme = self.settings.theme
         dark = {"dark": True, "light": False, "system": None}[theme]
         ui_theme.apply_theme(QApplication.instance(), dark=dark)
         self.theme_toggle.setText(
             t("theme.dark") if dark else t("theme.light"))
+        # Re-render nav + page icons in the new palette.
+        for key, btn in self.nav_buttons.items():
+            btn.setIcon(icons.nav(icons.NAV_ICONS[key]))
+        for page in self._pages.values():
+            refresh = getattr(page, "refresh_icons", None)
+            if refresh is not None:
+                try:
+                    refresh()
+                except Exception as e:
+                    _errlog(f"refresh_icons failed "
+                            f"({type(page).__name__}): {e!r}")
+
+    def showEvent(self, event) -> None:
+        """Start the first auto-analysis once the window has painted."""
+        super().showEvent(event)
+        if self.settings.auto_analyze and not self._auto_analyze_done:
+            self._auto_analyze_done = True
+            QTimer.singleShot(250, self.analyze_all)
 
     # -------------------------------------------------------- navigation
 
     def _get_page(self, key: str) -> QWidget:
-        """Return the page for `key`, building it lazily on first use."""
+        """Return the page for `key`, building it lazily on first use.
+
+        Args:
+            key: The page identifier (e.g., "clean", "startup").
+
+        Returns:
+            QWidget: The page widget.
+        """
         page = self._pages.get(key)
         if page is None:
             if key == "clean":
@@ -167,6 +260,11 @@ class MainWindow(QMainWindow):
         return page
 
     def show_page(self, key: str) -> None:
+        """Navigate to the specified page.
+
+        Args:
+            key: The page identifier.
+        """
         page = self._get_page(key)
         self.stack.setCurrentWidget(page)
         btn = self.nav_buttons.get(key)
@@ -178,6 +276,7 @@ class MainWindow(QMainWindow):
 
     @property
     def pages_clean(self) -> CleanPage:
+        """The CleanPage instance."""
         return self._get_page("clean")
 
     @property
@@ -187,23 +286,40 @@ class MainWindow(QMainWindow):
 
     @property
     def pages_dupes(self) -> DuplicatePage:
+        """The DuplicatePage instance."""
         return self._get_page("dupes")
 
     @property
     def log_page(self) -> LogPage:
+        """The LogPage instance."""
         return self._get_page("log")
 
     # -------------------------------------------------- host API (pages)
 
     def log(self, msg: str) -> None:
+        """Append a message to the application log.
+
+        Args:
+            msg: The log message string.
+        """
         self.log_page.log(msg)
 
     def set_status(self, text: str) -> None:
+        """Update the status bar text.
+
+        Args:
+            text: The status message to display.
+        """
         self.pages_clean.status_lbl.setText(text)
 
     def set_busy(self, value: bool, mode: str = "determinate") -> None:
         """Set the global busy flag, drive the progress bar and notify
-        every built page (on_busy) so they disable their action buttons."""
+        every built page (on_busy) so they disable their action buttons.
+
+        Args:
+            value: True to show busy state, False to hide.
+            mode: "determinate" (known progress) or "indeterminate" (unknown).
+        """
         self.busy = value
         bar = self.pages_clean.progress
         if value:
@@ -221,9 +337,11 @@ class MainWindow(QMainWindow):
                     _errlog(f"on_busy failed ({type(page).__name__}): {e!r}")
 
     def request_cancel(self) -> None:
+        """Request cancellation of the current background operation."""
         self.controller.cancel()
 
     def update_total(self) -> None:
+        """Recalculate and display the total size/files to clean."""
         self.pages_clean.update_total()
 
     # ------------------------------------------------------------ flows
@@ -239,6 +357,7 @@ class MainWindow(QMainWindow):
                 cat.files = int(entry.get("files", 0))
 
     def analyze_all(self) -> None:
+        """Initiate a full analysis of all categories."""
         if self.busy:
             return
         self._apply_cache()
@@ -248,40 +367,48 @@ class MainWindow(QMainWindow):
         self.controller.analyze()
 
     def confirm_clean(self) -> None:
+        """Show the structured confirmation dialog and clean if approved."""
         selected = self.pages_clean.selected_categories()
         if not selected:
-            QMessageBox.information(self, APP_NAME, t("msg.no_categories"))
+            app_info(self, "info", APP_NAME, t("msg.no_categories"))
             return
         total = sum(c.size for c in selected)
-        names = "\n".join(f"  \u2022 {c.label}" for c in selected)
-        detail = t("msg.clean_detail_base")
+        heading = t("msg.clean_confirm_heading", n=len(selected),
+                    size=format_size(total))
+        subtitle = t("msg.clean_confirm_sub")
+        items = [(c.label, format_size(c.size) if c.size else
+                  t("clean.recycle_empty") if c.recycle_bin
+                  else t("clean.is_clean")) for c in selected]
+        notes = [t("msg.clean_note_browsers")]
         if any(c.recycle_bin for c in selected):
-            detail += t("msg.clean_detail_recycle")
+            notes.append(t("msg.clean_note_recycle"))
+        if any(c.key == "winapp" for c in selected):
+            notes.append(t("msg.clean_note_winapp"))
         if any(c.needs_admin for c in selected) and not is_admin():
-            detail += t("msg.clean_detail_admin")
-        msg = t("msg.clean_confirm", names=names, size=format_size(total),
-                detail=detail)
-        box = QMessageBox(QMessageBox.Warning, APP_NAME, msg,
-                          QMessageBox.Yes | QMessageBox.No, self)
-        if box.exec() != QMessageBox.Yes:
+            notes.append(t("msg.clean_note_admin"))
+        if not structured_confirm(self, "warning", heading, subtitle,
+                                  items, notes,
+                                  yes_text=t("btn.clean_yes")):
             return
         self.pages_clean.progress.setValue(0)
         self.set_status(t("status.cleaning"))
         self.controller.clean([c.key for c in selected])
 
     def preview_clean(self) -> None:
+        """Collect preview file lists for selected categories."""
         selected = self.pages_clean.selected_categories()
         if not selected:
-            QMessageBox.information(self, APP_NAME, t("msg.no_categories"))
+            app_info(self, "info", APP_NAME, t("msg.no_categories"))
             return
         if (sum(c.files for c in selected) == 0
                 and not any(c.recycle_bin for c in selected)):
-            QMessageBox.information(self, APP_NAME, t("msg.preview_empty"))
+            app_info(self, "info", APP_NAME, t("msg.preview_empty"))
             return
         self.set_busy(True, mode="indeterminate")
         self.controller.preview([c.key for c in selected], limit=1000)
 
     def load_winapp_rules(self) -> None:
+        """Open file dialog and load winapp2.ini rules."""
         path, _f = QFileDialog.getOpenFileName(
             self, t("dialog.winapp_title"), "",
             f"{t('dialog.winapp_filter')} (*.ini);;"
@@ -295,6 +422,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------- controller wiring
 
     def _wire_controller(self) -> None:
+        """Connect controller signals to window slots."""
         c = self.controller
         c.busy_changed.connect(self._on_controller_busy)
         c.analysis_started.connect(
@@ -378,8 +506,8 @@ class MainWindow(QMainWindow):
         win.exec()
 
     def _on_preview_error(self, message: str) -> None:
-        QMessageBox.critical(self, APP_NAME,
-                             t("msg.preview_error", exc=message))
+        app_info(self, "critical", APP_NAME,
+                 t("msg.preview_error", exc=message))
 
     def _on_winapp_loaded(self, count: int) -> None:
         self.pages_clean._build_rows()
@@ -389,8 +517,8 @@ class MainWindow(QMainWindow):
 
     def _on_winapp_error(self, message: str) -> None:
         self.set_status(t("status.winapp_error"))
-        QMessageBox.critical(self, APP_NAME,
-                             t("msg.winapp_error", exc=message))
+        app_info(self, "critical", APP_NAME,
+                 t("msg.winapp_error", exc=message))
 
     def _on_operation_error(self, message: str) -> None:
         _errlog(f"operation error: {message}")
@@ -399,7 +527,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ events
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Cancel any running operation before closing (cooperative)."""
+        """Cancel any running operation before closing (cooperative).
+
+        This ensures that background threads are not abruptly terminated
+        while holding file handles or locks.
+
+        Args:
+            event: The close event.
+        """
         if self.controller.busy and not self._closing:
             self._closing = True
             self.controller.cancel()
@@ -410,6 +545,7 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def _close_when_idle(self, busy: bool) -> None:
+        """Close the window once the controller is idle."""
         if not busy:
             self.controller.busy_changed.disconnect(self._close_when_idle)
             self.close()

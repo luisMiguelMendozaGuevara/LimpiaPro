@@ -12,8 +12,15 @@
 QMainWindow, QDialog, QMessageBox, QWidget {
     background-color: %BG%;
     color: %TEXT%;
-    font-family: "Segoe UI";
+    font-family: %FONT_STACK%;
     font-size: 13px;
+}
+
+/* Labels and checkboxes must not paint their own background: the global
+   QWidget rule above would otherwise draw a %BG% box around every label
+   sitting on a differently-colored surface (sidebar, cards, rows). */
+QLabel, QCheckBox {
+    background: transparent;
 }
 
 /* ------------------------------------------------------------- sidebar */
@@ -24,8 +31,9 @@ QFrame#sidebar {
 }
 
 QLabel#appLogo {
-    font-size: 18px;
+    font-size: 21px;
     font-weight: 700;
+    letter-spacing: 0.3px;
     color: %TEXT%;
     background: transparent;
 }
@@ -37,7 +45,7 @@ QPushButton#navButton {
     padding: 8px 12px;
     text-align: left;
     color: %TEXT%;
-    font-size: 13px;
+    font-size: 14px;
 }
 
 QPushButton#navButton:hover {
@@ -53,8 +61,9 @@ QPushButton#navButton:checked {
 /* ------------------------------------------------------------ headers */
 
 QLabel#pageTitle {
-    font-size: 20px;
+    font-size: 22px;
     font-weight: 700;
+    letter-spacing: 0.2px;
     color: %TEXT%;
     background: transparent;
 }
@@ -102,7 +111,7 @@ QLabel#catDesc {
 }
 
 QLabel#catSize {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
     color: %SUCCESS_TEXT%;
     background: transparent;
@@ -122,6 +131,10 @@ QPushButton {
     border-radius: 6px;
     padding: 7px 14px;
     color: %TEXT%;
+}
+
+QPushButton:focus {
+    border-color: %ACCENT%;
 }
 
 QPushButton:hover {
@@ -331,6 +344,11 @@ QComboBox:hover, QLineEdit:hover {
     border-color: %ACCENT%;
 }
 
+QComboBox:focus, QLineEdit:focus {
+    border: 1px solid %ACCENT%;
+    background-color: %CARD%;
+}
+
 QComboBox QAbstractItemView {
     background-color: %INPUT%;
     border: 1px solid %BORDER%;
@@ -343,7 +361,7 @@ QPlainTextEdit {
     border: 1px solid %BORDER%;
     border-radius: 6px;
     color: %MUTED%;
-    font-family: "Consolas";
+    font-family: "Cascadia Mono", "Consolas";
     font-size: 12px;
     padding: 4px;
 }
@@ -353,4 +371,64 @@ QToolTip {
     color: %TEXT%;
     border: 1px solid %BORDER%;
     padding: 4px 8px;
+}
+
+/* ---------------------------------------------------------- dialogs */
+
+QMessageBox {
+    background-color: %BG%;
+    min-width: 460px;
+}
+
+QMessageBox QLabel {
+    font-size: 13px;
+    padding-right: 8px;
+}
+
+QMessageBox QPushButton {
+    min-width: 104px;
+    padding: 8px 16px;
+}
+
+QLabel#dlgHeading {
+    font-size: 17px;
+    font-weight: 700;
+    color: %TEXT%;
+    background: transparent;
+}
+
+QLabel#dlgSubtle {
+    font-size: 12px;
+    color: %MUTED%;
+    background: transparent;
+}
+
+QLabel#dlgItem {
+    font-size: 13px;
+    font-weight: 600;
+    color: %TEXT%;
+    background: transparent;
+}
+
+QLabel#dlgItemRight {
+    font-size: 12px;
+    color: %SUCCESS_TEXT%;
+    background: transparent;
+}
+
+QFrame#noteCard {
+    background-color: %WARNING_SOFT%;
+    border: 1px solid %WARNING_BORDER%;
+    border-radius: 8px;
+}
+
+QFrame#noteCard[kind="danger"] {
+    background-color: %ERROR_SOFT%;
+    border: 1px solid %ERROR_BORDER%;
+}
+
+QLabel#noteText {
+    font-size: 12px;
+    color: %TEXT%;
+    background: transparent;
 }

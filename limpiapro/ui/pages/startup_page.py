@@ -1,11 +1,23 @@
 """Page: Startup manager (startup apps, scheduled tasks, processes)
 (replica of the legacy startup page).
 
-Three sub-tabs in a QTabWidget, each following the same pattern: a
-worker gathers data off the UI thread via run_async, the done-callback
-fills the tree in batches, and every entry point respects the global
-host.busy guard. Startup app icons come from the native QFileIconProvider
-(the legacy extracted them with GDI+ on a worker)."""
+This module implements the comprehensive startup and process management
+UI for PySide6. It replicates the behavior of the legacy CustomTkinter
+startup page while providing a modern, native Windows experience.
+
+Architecture:
+    Three sub-tabs in a QTabWidget, each following the same pattern:
+    1. A worker gathers data off the UI thread via run_async.
+    2. The done-callback fills the tree in batches.
+    3. Every entry point respects the global host.busy guard.
+    4. Startup app icons come from the native QFileIconProvider
+       (the legacy extracted them with GDI+ on a worker).
+
+Design Principles:
+1. Safety: Protected processes cannot be killed.
+2. Non-Destructive: Startup entries are moved to disabled keys, not deleted.
+3. Thread Safety: All system queries happen on background threads.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +30,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QTabWidget,
     QVBoxLayout,
@@ -30,14 +41,30 @@ from ...i18n import t
 from ...processes import get_processes, is_protected, kill_process
 from ...startup import get_disabled_startup, get_startup_apps, is_runonce_entry, set_startup
 from ...tasks import get_scheduled_tasks, set_task_enabled
+from .. import icons
 from ..theme import GREEN_TEXT, ORANGE
-from ..widgets import fill_tree, make_tree, run_async, selected_many, selected_one
+from ..widgets import (
+    app_confirm,
+    app_info,
+    fill_tree,
+    make_tree,
+    run_async,
+    selected_many,
+    selected_one,
+)
 
 _ICON_PROVIDER = QFileIconProvider()
 
 
 def _command_exe(command: str) -> str:
-    """Best-effort executable path from a command line (for the icon)."""
+    """Best-effort executable path from a command line (for the icon).
+
+    Args:
+        command: The startup command string.
+
+    Returns:
+        str: The executable path, or empty string if unparseable.
+    """
     cmd = (command or "").strip()
     if not cmd:
         return ""
@@ -47,7 +74,15 @@ def _command_exe(command: str) -> str:
 
 
 class StartupPage(QWidget):
-    """Startup apps, scheduled tasks and running processes manager."""
+    """Startup apps, scheduled tasks and running processes manager.
+
+    Attributes:
+        host: The main window host.
+        tabs: The QTabWidget containing the three sub-tabs.
+        startup_data: List of startup app entries.
+        tasks_data: List of scheduled task entries.
+        proc_data: List of running process entries.
+    """
 
     def __init__(self, host, parent: QWidget | None = None):
         super().__init__(parent)
@@ -69,10 +104,27 @@ class StartupPage(QWidget):
         self.tabs.addTab(self._build_tasks_tab(), t("tab.tasks"))
         self.tabs.addTab(self._build_processes_tab(), t("tab.processes"))
         lay.addWidget(self.tabs, 1)
+        self._apply_button_icons()
 
     # ------------------------------------------------------ startup apps
 
+    def _apply_button_icons(self) -> None:
+        """Attach themed icons to every tab's buttons."""
+        icons.apply(self.startup_refresh_btn, "refresh")
+        icons.apply(self.startup_disable_btn, "disable", role="warning")
+        icons.apply(self.startup_reenable_btn, "enable", role="success")
+        icons.apply(self.tasks_refresh_btn, "refresh")
+        icons.apply(self.tasks_disable_btn, "disable", role="warning")
+        icons.apply(self.tasks_enable_btn, "enable", role="success")
+        icons.apply(self.proc_refresh_btn, "refresh")
+        icons.apply(self.kill_btn, "cancel", role="error")
+
+    def refresh_icons(self) -> None:
+        """Re-apply every icon after a dark/light theme switch."""
+        self._apply_button_icons()
+
     def _build_startup_tab(self) -> QWidget:
+        """Build the startup apps sub-tab."""
         tab = QWidget()
         lay = QVBoxLayout(tab)
         lay.setContentsMargins(8, 8, 8, 8)
@@ -87,6 +139,7 @@ class StartupPage(QWidget):
         self.startup_disable_btn.clicked.connect(self.disable_startup_selected)
         reenable_btn = QPushButton(t("btn.reenable"))
         reenable_btn.clicked.connect(self.show_disabled_startup)
+        self.startup_reenable_btn = reenable_btn
         toolbar.addWidget(self.startup_refresh_btn)
         toolbar.addWidget(self.startup_disable_btn)
         toolbar.addWidget(reenable_btn)
@@ -106,6 +159,7 @@ class StartupPage(QWidget):
         return tab
 
     def refresh_startup(self) -> None:
+        """Refresh the startup apps list."""
         if self.host.busy:
             return
         self.host.set_busy(True, mode="indeterminate")
@@ -118,6 +172,7 @@ class StartupPage(QWidget):
         return (get_startup_apps(),)
 
     def _startup_done(self, data) -> None:
+        """Handle startup data load completion."""
         self.host.set_busy(False)
         self.startup_data = data
         specs = []
@@ -134,20 +189,18 @@ class StartupPage(QWidget):
         self.host.log(t("log.startup_loaded", n=len(self.startup_data)))
 
     def disable_startup_selected(self) -> None:
+        """Disable the selected startup entry."""
         entry = selected_one(self.startup_tree, self.startup_data)
         if entry is None:
             return
         if is_runonce_entry(entry):
-            msg = (f"\u26A0 {t('startup.runonce_warning')}\n\n"
+            msg = (f"{t('startup.runonce_warning')}\n\n"
                    f"{t('startup.runonce_confirm', name=entry['name'])}")
-            if QMessageBox.question(self, APP_NAME, msg,
-                                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            if not app_confirm(self, "warning", APP_NAME, msg):
                 return
         else:
-            if QMessageBox.question(
-                    self, APP_NAME, t("msg.disable_startup",
-                                      name=entry["name"]),
-                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            if not app_confirm(self, "warning", APP_NAME,
+                               t("msg.disable_startup", name=entry["name"])):
                 return
         self.host.set_busy(True, mode="indeterminate")
         run_async(self, self._disable_startup_worker, self._disable_startup_done,
@@ -166,11 +219,12 @@ class StartupPage(QWidget):
             self.host.set_status(t("status.startup_disable_error"))
             self.host.log(t("log.startup_disable_error",
                             name=entry["name"], msg=msg))
-            QMessageBox.critical(self, APP_NAME,
-                                 t("msg.startup_disable_error", msg=msg))
+            app_info(self, "critical", APP_NAME,
+                     t("msg.startup_disable_error", msg=msg))
         self.refresh_startup()
 
     def show_disabled_startup(self) -> None:
+        """Show the dialog to re-enable disabled startup entries."""
         if self.host.busy:
             return
         self.host.set_busy(True, mode="indeterminate")
@@ -184,7 +238,7 @@ class StartupPage(QWidget):
     def _disabled_done(self, disabled) -> None:
         self.host.set_busy(False)
         if not disabled:
-            QMessageBox.information(self, APP_NAME, t("msg.no_disabled"))
+            app_info(self, "info", APP_NAME, t("msg.no_disabled"))
             return
         win = QDialog(self)
         win.setWindowTitle(t("title.reattach"))
@@ -239,6 +293,7 @@ class StartupPage(QWidget):
         self.refresh_startup()
 
     def on_busy(self, busy: bool) -> None:
+        """Disable action buttons while an operation is running."""
         for b in (self.startup_refresh_btn, self.startup_disable_btn,
                   self.tasks_refresh_btn, self.tasks_disable_btn,
                   self.tasks_enable_btn, self.proc_refresh_btn, self.kill_btn):
@@ -247,6 +302,7 @@ class StartupPage(QWidget):
     # -------------------------------------------------- scheduled tasks
 
     def _build_tasks_tab(self) -> QWidget:
+        """Build the scheduled tasks sub-tab."""
         tab = QWidget()
         lay = QVBoxLayout(tab)
         lay.setContentsMargins(8, 8, 8, 8)
@@ -285,6 +341,7 @@ class StartupPage(QWidget):
         return tab
 
     def refresh_tasks(self) -> None:
+        """Refresh the scheduled tasks list."""
         if self.host.busy:
             return
         self.host.set_busy(True, mode="indeterminate")
@@ -319,12 +376,13 @@ class StartupPage(QWidget):
         self.host.log(t("log.tasks_loaded", n=len(tasks)))
 
     def _toggle_task(self, enable: bool) -> None:
+        """Enable or disable the selected scheduled task."""
         task = selected_one(self.tasks_tree, self.tasks_data)
         if task is None:
             return
         key = "msg.task_enable_q" if enable else "msg.task_disable_q"
-        if QMessageBox.question(self, APP_NAME, t(key, name=task["name"]),
-                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+        if not app_confirm(self, "warning", APP_NAME,
+                           t(key, name=task["name"])):
             return
         self.host.set_busy(True, mode="indeterminate")
         run_async(self, self._toggle_task_worker, self._toggle_task_done,
@@ -344,12 +402,14 @@ class StartupPage(QWidget):
         else:
             self.host.set_status(t("status.task_error"))
             self.host.log(t("log.task_error", name=name, msg=msg))
-            QMessageBox.critical(self, APP_NAME, t("msg.task_error", msg=msg))
+            app_info(self, "critical", APP_NAME,
+                     t("msg.task_error", msg=msg))
         self.refresh_tasks()
 
     # --------------------------------------------------------- processes
 
     def _build_processes_tab(self) -> QWidget:
+        """Build the running processes sub-tab."""
         tab = QWidget()
         lay = QVBoxLayout(tab)
         lay.setContentsMargins(8, 8, 8, 8)
@@ -389,6 +449,7 @@ class StartupPage(QWidget):
         return tab
 
     def refresh_processes(self) -> None:
+        """Refresh the running processes list."""
         if self.host.busy:
             return
         self.host.set_busy(True, mode="indeterminate")
@@ -417,27 +478,28 @@ class StartupPage(QWidget):
         self.host.log(t("log.processes_shown", n=count))
 
     def _generic_error(self, area, exc) -> None:
+        """Handle generic load errors."""
         self.host.set_busy(False)
         self.host.set_status(t("status.load_error", area=area))
         self.host.log(t("log.load_error", area=area, exc=exc))
-        QMessageBox.critical(self, APP_NAME,
-                             t("msg.load_error", area=area, exc=exc))
+        app_info(self, "critical", APP_NAME,
+                 t("msg.load_error", area=area, exc=exc))
 
     def kill_selected(self) -> None:
+        """Kill the selected process after confirmation."""
         items = self.proc_tree.selectedItems()
         if not items:
-            QMessageBox.information(self, APP_NAME, t("msg.select_process"))
+            app_info(self, "info", APP_NAME, t("msg.select_process"))
             return
         item = items[0]
         pid = item.text(1)
         name = item.text(0)
         if is_protected(name):
-            QMessageBox.information(self, APP_NAME,
-                                    t("msg.process_protected", name=name))
+            app_info(self, "warning", APP_NAME,
+                     t("msg.process_protected", name=name))
             return
-        if QMessageBox.question(
-                self, APP_NAME, t("msg.kill_process", name=name, pid=pid),
-                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+        if not app_confirm(self, "danger", APP_NAME,
+                           t("msg.kill_process", name=name, pid=pid)):
             return
         self.host.set_busy(True, mode="indeterminate")
         run_async(self, self._kill_worker, self._kill_done, (pid, name))
@@ -454,8 +516,10 @@ class StartupPage(QWidget):
         else:
             self.host.set_status(t("status.process_error"))
             self.host.log(t("log.process_error", name=name, msg=msg))
-            QMessageBox.critical(self, APP_NAME, t("msg.process_error", msg=msg))
+            app_info(self, "critical", APP_NAME,
+                     t("msg.process_error", msg=msg))
         self.refresh_processes()
 
     def on_show(self) -> None:
+        """Called when the page becomes visible."""
         pass

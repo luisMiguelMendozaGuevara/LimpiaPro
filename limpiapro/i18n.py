@@ -40,12 +40,12 @@ _STRINGS = {
         "msg.recycle_emptied": "Papelera vaciada.",
         # ------------------------------------------------------- app
         "app.window_subtitle": "Limpiador de sistema",
-        "nav.clean": "\U0001F9F9  Limpieza",
-        "nav.startup": "\U0001F4C8  Inicio",
-        "nav.dupes": "\U0001F50D  Duplicados",
-        "nav.update": "\U0001F504  Windows Update",
-        "nav.uninstall": "\U0001F5D1  Desinstalar",
-        "nav.log": "\U0001F4DD  Registro",
+        "nav.clean": "Limpieza",
+        "nav.startup": "Inicio",
+        "nav.dupes": "Duplicados",
+        "nav.update": "Windows Update",
+        "nav.uninstall": "Desinstalar",
+        "nav.log": "Registro",
         "theme.dark": "Modo oscuro",
         "theme.light": "Modo claro",
         "log.started_admin": "{app} {ver} iniciado. (administrador)",
@@ -87,6 +87,24 @@ _STRINGS = {
                                    "sistema.\n"),
         "msg.clean_confirm": ("Se limpiaran:\n{names}\n\nTamano estimado: "
                               "{size}\n\n{detail}\nContinuar?"),
+        "msg.clean_confirm_heading": "Se limpiaran {n} categorias ({size})",
+        "msg.clean_confirm_sub": ("Los archivos se eliminaran de forma "
+                                  "permanente. Marca Vista previa para ver "
+                                  "la lista antes de borrar."),
+        "msg.clean_note_browsers": ("Recomendacion: cierra los navegadores "
+                                    "(Chrome, Edge, Firefox, etc.) y otras "
+                                    "aplicaciones antes de limpiar para "
+                                    "evitar errores."),
+        "msg.clean_note_recycle": ("Atencion: la papelera de reciclaje se "
+                                   "vaciara de forma permanente."),
+        "msg.clean_note_admin": ("Aviso: estas ejecutando sin permisos de "
+                                 "administrador; algunas categorias del "
+                                 "sistema se omitiran."),
+        "msg.clean_note_winapp": ("winapp2: solo se borraran caches y logs "
+                                  "de las aplicaciones detectadas por la "
+                                  "base de datos comunitaria. Contrasenas, "
+                                  "historial y datos personales estan "
+                                  "excluidos por seguridad."),
         "msg.preview_empty": "No hay archivos que mostrar (todo parece limpio).",
         "title.preview": "Vista previa de limpieza",
         "preview.header": ("Archivos que se eliminaran (primeras 1000 "
@@ -107,10 +125,16 @@ _STRINGS = {
         "clean.subtitle": ("Selecciona lo que quieres limpiar. Nada se "
                            "elimina sin tu confirmacion."),
         "btn.select_all": "Seleccionar todo",
+        "btn.select_none": "Deseleccionar todo",
         "btn.none": "Ninguno",
         "btn.preview": "Vista previa",
         "btn.cancel": "Cancelar",
-        "btn.winapp_rules": "Reglas winapp2...",
+        "btn.accept": "Aceptar",
+        "btn.confirm_yes": "Si, continuar",
+        "btn.clean_yes": "Si, limpiar",
+        "btn.delete_yes": "Si, eliminar",
+        "btn.uninstall_yes": "Si, desinstalar",
+        "btn.winapp_rules": "Reglas winapp2",
         "btn.clean_selected": "Limpiar seleccionado",
         "clean.total_calculating": "Total seleccionado: calculando...",
         "clean.total": "Total seleccionado: {size}",
@@ -123,9 +147,9 @@ _STRINGS = {
                               "(Documents, Desktop, Downloads, ...) y sus "
                               "subcarpetas nunca se eliminan."),
         # ------------------------------------------------------- qt UI
-        "nav.home": "\U0001F3E0  Inicio",
-        "nav.results": "\U0001F4CA  Resultados",
-        "nav.settings": "\U00002699  Configuracion",
+        "nav.home": "Inicio",
+        "nav.results": "Resultados",
+        "nav.settings": "Configuracion",
         "home.title": "Bienvenido a LimpiaPro",
         "home.subtitle": "Analiza tu sistema y libera espacio de forma segura.",
         "home.stat_junk": "Basura encontrada",
@@ -167,18 +191,34 @@ _STRINGS = {
         "settings.saved": "Guardado.",
         # ------------------------------------------------------- categories
         "cat.temp.label": "Archivos temporales del sistema",
-        "cat.temp.desc": "TEMP de usuario y sistema, Prefetch",
+        "cat.temp.desc": ("Cache temporal de Windows y de los programas. Se "
+                          "regenera sola: no afecta a tus documentos ni a "
+                          "tus ajustes."),
         "cat.browser.label": "Cache de navegadores",
-        "cat.browser.desc": "Edge, Chrome, Brave, Vivaldi, Opera, Opera GX y Firefox",
+        "cat.browser.desc": ("Paginas guardadas en cache por Edge, Chrome, "
+                             "Brave, Vivaldi, Opera y Firefox. Tus "
+                             "contrasenas, marcadores e historial no se "
+                             "tocan; las webs tardaran un poco mas la "
+                             "primera vez que las visites tras limpiar."),
         "cat.recycle.label": "Papelera de reciclaje",
-        "cat.recycle.desc": "Vacia la papelera del sistema",
+        "cat.recycle.desc": ("Vacia la papelera de forma permanente. "
+                             "Revisa su contenido antes de continuar: los "
+                             "archivos borrados no se podran recuperar."),
         "cat.apps.label": "Cache de aplicaciones y logs",
-        "cat.apps.desc": "Miniaturas, CrashDumps, Windows Update, logs CBS",
+        "cat.apps.desc": ("Miniaturas del explorador, informes de errores, "
+                          "cache de Windows Update y logs del sistema. "
+                          "Windows los vuelve a crear cuando los necesita."),
         "cat.history.label": "Historial reciente",
-        "cat.history.desc": "Elementos recientes del menu Inicio",
+        "cat.history.desc": ("Lista de documentos y busquedas recientes del "
+                             "menu Inicio. No borra tus archivos, solo el "
+                             "rastro de acceso."),
         "cat.winapp.label": "Aplicaciones (reglas winapp2)",
         "cat.winapp.desc_detected": ("Base de datos comunitaria winapp2.ini: "
-                                     "{n} apps detectadas"),
+                                     "{n} apps detectadas. Solo se borran "
+                                     "caches y logs; las secciones con "
+                                     "contrasenas, historial o datos "
+                                     "personales estan excluidas por "
+                                     "seguridad."),
         "cat.winapp.desc_none": ("Base de datos comunitaria winapp2.ini: sin "
                                  "reglas cargadas"),
         # ------------------------------------------------------- widgets
@@ -195,7 +235,7 @@ _STRINGS = {
         "tab.tasks": "Tareas programadas",
         "tab.processes": "Procesos activos",
         "btn.disable_selected": "Desactivar seleccionada",
-        "btn.reenable": "Reactivar desactivadas...",
+        "btn.reenable": "Reactivar desactivadas",
         "btn.disable": "Desactivar",
         "btn.enable": "Activar",
         "btn.end_process": "Terminar proceso",
@@ -262,7 +302,7 @@ _STRINGS = {
         "dupes.title": "Archivos duplicados",
         "dupes.subtitle": ("Escanea una carpeta y encuentra archivos con el "
                            "mismo contenido (por hash blake2b)."),
-        "btn.choose_folder": "Elegir carpeta...",
+        "btn.choose_folder": "Elegir carpeta",
         "dupes.path_placeholder": "Ruta a escanear",
         "dupes.min_size": "Tamano min:",
         "btn.find_dupes": "Buscar duplicados",
@@ -369,12 +409,12 @@ _STRINGS = {
         "msg.recycle_emptied": "Recycle bin emptied.",
         # ------------------------------------------------------- app
         "app.window_subtitle": "System cleaner",
-        "nav.clean": "\U0001F9F9  Cleanup",
-        "nav.startup": "\U0001F4C8  Startup",
-        "nav.dupes": "\U0001F50D  Duplicates",
-        "nav.update": "\U0001F504  Windows Update",
-        "nav.uninstall": "\U0001F5D1  Uninstall",
-        "nav.log": "\U0001F4DD  Log",
+        "nav.clean": "Cleanup",
+        "nav.startup": "Startup",
+        "nav.dupes": "Duplicates",
+        "nav.update": "Windows Update",
+        "nav.uninstall": "Uninstall",
+        "nav.log": "Log",
         "theme.dark": "Dark mode",
         "theme.light": "Light mode",
         "log.started_admin": "{app} {ver} started. (administrator)",
@@ -412,6 +452,23 @@ _STRINGS = {
                                    "to clean system files.\n"),
         "msg.clean_confirm": ("The following will be cleaned:\n{names}\n\n"
                               "Estimated size: {size}\n\n{detail}\nContinue?"),
+        "msg.clean_confirm_heading": "{n} categories will be cleaned ({size})",
+        "msg.clean_confirm_sub": ("Files will be permanently deleted. Use "
+                                  "Preview to review the list before "
+                                  "deleting."),
+        "msg.clean_note_browsers": ("Recommendation: close your browsers "
+                                    "(Chrome, Edge, Firefox, etc.) and other "
+                                    "apps before cleaning to avoid errors."),
+        "msg.clean_note_recycle": ("Attention: the recycle bin will be "
+                                   "emptied permanently."),
+        "msg.clean_note_admin": ("Notice: running without administrator "
+                                 "rights; some system categories will be "
+                                 "skipped."),
+        "msg.clean_note_winapp": ("winapp2: only caches and logs of the "
+                                  "applications detected by the community "
+                                  "database will be removed. Passwords, "
+                                  "history and personal data are excluded "
+                                  "for safety."),
         "msg.preview_empty": "No files to show (everything looks clean).",
         "title.preview": "Cleanup preview",
         "preview.header": "Files that will be deleted (first 1000 entries)",
@@ -431,10 +488,16 @@ _STRINGS = {
         "clean.subtitle": ("Choose what you want to clean. Nothing is deleted "
                            "without your confirmation."),
         "btn.select_all": "Select all",
+        "btn.select_none": "Deselect all",
         "btn.none": "None",
         "btn.preview": "Preview",
         "btn.cancel": "Cancel",
-        "btn.winapp_rules": "winapp2 rules...",
+        "btn.accept": "OK",
+        "btn.confirm_yes": "Yes, continue",
+        "btn.clean_yes": "Yes, clean",
+        "btn.delete_yes": "Yes, delete",
+        "btn.uninstall_yes": "Yes, uninstall",
+        "btn.winapp_rules": "winapp2 rules",
         "btn.clean_selected": "Clean selected",
         "clean.total_calculating": "Selected total: calculating...",
         "clean.total": "Selected total: {size}",
@@ -447,9 +510,9 @@ _STRINGS = {
                               "(Documents, Desktop, Downloads, ...) and "
                               "their subfolders are never deleted."),
         # ------------------------------------------------------- qt UI
-        "nav.home": "\U0001F3E0  Home",
-        "nav.results": "\U0001F4CA  Results",
-        "nav.settings": "\U00002699  Settings",
+        "nav.home": "Home",
+        "nav.results": "Results",
+        "nav.settings": "Settings",
         "home.title": "Welcome to LimpiaPro",
         "home.subtitle": "Analyze your system and free up space safely.",
         "home.stat_junk": "Junk found",
@@ -491,18 +554,33 @@ _STRINGS = {
         "settings.saved": "Saved.",
         # ------------------------------------------------------- categories
         "cat.temp.label": "System temporary files",
-        "cat.temp.desc": "User and system TEMP, Prefetch",
+        "cat.temp.desc": ("Windows and app temp cache. Regenerated "
+                          "automatically: your documents and settings are "
+                          "never touched."),
         "cat.browser.label": "Browser caches",
-        "cat.browser.desc": "Edge, Chrome, Brave, Vivaldi, Opera, Opera GX and Firefox",
+        "cat.browser.desc": ("Pages cached by Edge, Chrome, Brave, Vivaldi, "
+                             "Opera and Firefox. Your passwords, bookmarks "
+                             "and history are not touched; sites load a bit "
+                             "slower the first time you revisit them after "
+                             "cleaning."),
         "cat.recycle.label": "Recycle bin",
-        "cat.recycle.desc": "Empties the system recycle bin",
+        "cat.recycle.desc": ("Permanently empties the recycle bin. Check its "
+                             "contents first: deleted files cannot be "
+                             "recovered."),
         "cat.apps.label": "App caches and logs",
-        "cat.apps.desc": "Thumbnails, crash dumps, Windows Update, CBS logs",
+        "cat.apps.desc": ("Explorer thumbnails, crash reports, Windows "
+                          "Update cache and system logs. Windows recreates "
+                          "them whenever needed."),
         "cat.history.label": "Recent history",
-        "cat.history.desc": "Start menu recent items",
+        "cat.history.desc": ("Recent documents and searches shown in the "
+                             "Start menu. Your files are not deleted, only "
+                             "the access trail."),
         "cat.winapp.label": "Applications (winapp2 rules)",
         "cat.winapp.desc_detected": ("Community winapp2.ini database: {n} "
-                                     "apps detected"),
+                                     "apps detected. Only caches and logs "
+                                     "are removed; sections with passwords, "
+                                     "history or personal data are excluded "
+                                     "for safety."),
         "cat.winapp.desc_none": "Community winapp2.ini database: no rules loaded",
         # ------------------------------------------------------- widgets
         "msg.select_one": "Select an item in the list.",
@@ -518,7 +596,7 @@ _STRINGS = {
         "tab.tasks": "Scheduled tasks",
         "tab.processes": "Running processes",
         "btn.disable_selected": "Disable selected",
-        "btn.reenable": "Re-enable disabled...",
+        "btn.reenable": "Re-enable disabled",
         "btn.disable": "Disable",
         "btn.enable": "Enable",
         "btn.end_process": "End process",
@@ -585,7 +663,7 @@ _STRINGS = {
         "dupes.title": "Duplicate files",
         "dupes.subtitle": ("Scan a folder and find files with identical "
                            "content (blake2b hash)."),
-        "btn.choose_folder": "Choose folder...",
+        "btn.choose_folder": "Choose folder",
         "dupes.path_placeholder": "Folder to scan",
         "dupes.min_size": "Min size:",
         "btn.find_dupes": "Find duplicates",

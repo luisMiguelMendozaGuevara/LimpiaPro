@@ -29,6 +29,13 @@ Usage:
         path=r"C:\Users\...\Cache\data_0",
         result="success"
     )
+
+Architecture Notes:
+    - JSONL format: Each line is a complete JSON object, making the file easy
+      to parse with standard tools (jq, pandas, grep).
+    - Lazy file creation: The log file is created on first use, not at import.
+    - Error resilience: Audit logging failures never break the main operation.
+    - Singleton pattern: A single `audit` instance is used throughout the app.
 """
 
 import json
@@ -38,6 +45,8 @@ from typing import Literal
 
 from .paths import get_logs_dir
 
+# Type definitions for operation and result values.
+# These provide static type checking and IDE autocompletion.
 Operation = Literal["cleanup", "scan", "preview", "uninstall", "startup", 
                     "duplicates", "tasks", "processes", "update"]
 Result = Literal["success", "failed", "skipped"]
@@ -48,14 +57,26 @@ class AuditLogger:
     
     Writes JSONL records to %LOCALAPPDATA%/LimpiaPro/logs/audit.jsonl
     Each line is a complete JSON object, making the file easy to parse
-    and analyze with standard tools (jq, pandas, etc.)."""
+    and analyze with standard tools (jq, pandas, etc.).
+    
+    Attributes:
+        _log_path (Path | None): Cached path to the audit log file.
+    """
     
     def __init__(self):
+        """Initialize the AuditLogger with lazy path resolution."""
         self._log_path = None
     
     @property
     def log_path(self) -> Path:
-        """Path to the audit log file (created on first use)."""
+        """Get the path to the audit log file (created on first use).
+        
+        The log directory is created if it doesn't exist. The file itself
+        is created on first write (append mode).
+        
+        Returns:
+            Path: Absolute path to the audit.jsonl file.
+        """
         if self._log_path is None:
             logs_dir = Path(get_logs_dir())
             logs_dir.mkdir(parents=True, exist_ok=True)
@@ -75,26 +96,42 @@ class AuditLogger:
     ) -> None:
         r"""Log a single operation.
         
+        This is the primary API for recording operations. Each call writes
+        one JSONL line to the audit log file.
+        
         Args:
-            operation: High-level operation type (cleanup, scan, etc.)
-            category: Category being processed (chrome, temp, etc.)
-            action: Specific action (delete, hash, detect, etc.)
-            path: Target file/directory path (when applicable)
-            result: Outcome (success, failed, skipped)
-            error_code: Windows error code or errno (when failed)
-            error_msg: Human-readable error description
-            details: Optional extra context (dict)
+            operation (Operation): High-level operation type (cleanup, scan, etc.).
+            category (str, optional): Category being processed (chrome, temp, etc.).
+                                      Defaults to "".
+            action (str, optional): Specific action (delete, hash, detect, etc.).
+                                    Defaults to "".
+            path (str, optional): Target file/directory path (when applicable).
+                                  Defaults to "".
+            result (Result, optional): Outcome (success, failed, skipped).
+                                       Defaults to "success".
+            error_code (int, optional): Windows error code or errno (when failed).
+                                        Defaults to 0.
+            error_msg (str, optional): Human-readable error description.
+                                       Defaults to "".
+            details (dict | None, optional): Optional extra context (dict).
+                                             Defaults to None.
         
         Example:
-            audit.log_operation(
-                operation="cleanup",
-                category="chrome",
-                action="delete",
-                path=r"C:\Users\...\Cache\data_0",
-                result="failed",
-                error_code=32,
-                error_msg="The process cannot access the file because it is being used"
-            )
+            >>> audit.log_operation(
+            ...     operation="cleanup",
+            ...     category="chrome",
+            ...     action="delete",
+            ...     path=r"C:\Users\...\Cache\data_0",
+            ...     result="failed",
+            ...     error_code=32,
+            ...     error_msg="The process cannot access the file because it is being used"
+            ... )
+            
+        Notes:
+            - Error resilience: If logging fails (disk full, permission denied),
+              the exception is silently ignored to prevent breaking the main operation.
+            - Thread safety: File writes are not synchronized; concurrent writes
+              may interleave, but each line is atomic (single write call).
         """
         record = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -120,14 +157,23 @@ class AuditLogger:
     def analyze_errors(self) -> dict:
         """Analyze the audit log to identify error patterns.
         
+        Reads the entire audit log and aggregates failure statistics by
+        category and error code. Useful for identifying problematic
+        categories or recurring error types.
+        
         Returns:
-            Dict with error statistics:
-            {
-                "total_operations": int,
-                "failures_by_category": {category: count},
-                "failures_by_error_code": {code: count},
-                "most_problematic_categories": [(category, count), ...]
-            }
+            dict: Error statistics with keys:
+                - total_operations (int): Total number of logged operations.
+                - failures_by_category (dict[str, int]): Count of failures per category.
+                - failures_by_error_code (dict[int, int]): Count of failures per error code.
+                - most_problematic_categories (list[tuple[str, int]]): Top 10 categories
+                  by failure count, sorted descending.
+                  
+        Notes:
+            - Malformed lines: Silently skipped (JSONDecodeError, KeyError).
+            - Empty log: Returns {"total_operations": 0}.
+            - Performance: Reads the entire file into memory; not suitable for
+              very large logs (>100MB).
         """
         if not self.log_path.exists():
             return {"total_operations": 0}
@@ -170,5 +216,6 @@ class AuditLogger:
         }
 
 
-# Singleton instance
+# Singleton instance used throughout the application.
+# Import as: from .audit_log import audit
 audit = AuditLogger()

@@ -1,15 +1,27 @@
 """Page: uninstaller (replica of the legacy uninstall page).
 
-Lists installed programs from the registry, launches their uninstallers
-safely (argument lists, never shell=True) and searches for leftover files
-and registry keys afterwards."""
+This module implements the application uninstaller UI for PySide6. It
+replicates the behavior of the legacy CustomTkinter uninstall page while
+providing a modern, native Windows experience.
+
+Architecture:
+    - Lists installed programs from the registry.
+    - Launches their uninstallers safely (argument lists, never shell=True).
+    - Searches for leftover files and registry keys afterwards.
+
+Design Principles:
+1. Safety: Uninstallers are launched with argument lists, not shell strings,
+   to prevent command injection.
+2. Thoroughness: Searches for leftover files and registry keys after
+   uninstallation to ensure a clean system.
+3. User Control: The user explicitly selects which leftovers to delete.
+"""
 
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -24,11 +36,27 @@ from ...uninstall import (
     launch_uninstaller,
 )
 from ...utils import _delete_path, format_size
-from ..widgets import fill_tree, make_tree, readonly_toplevel, run_async, selected_one
+from .. import icons
+from ..widgets import (
+    app_confirm,
+    app_info,
+    fill_tree,
+    make_tree,
+    readonly_toplevel,
+    run_async,
+    selected_one,
+)
 
 
 class UninstallPage(QWidget):
-    """Installed programs list with uninstall and leftover cleanup."""
+    """Installed programs list with uninstall and leftover cleanup.
+
+    Attributes:
+        host: The main window host.
+        apps: List of installed application entries.
+        leftovers: List of leftover paths found after uninstall.
+        tree: The QTreeWidget displaying installed apps.
+    """
 
     def __init__(self, host, parent: QWidget | None = None):
         super().__init__(parent)
@@ -68,7 +96,7 @@ class UninstallPage(QWidget):
         bar.addStretch(1)
         bar.addWidget(self.info)
         lay.addLayout(bar)
-
+        self._apply_button_icons()
         self.tree = make_tree(
             self,
             [
@@ -83,17 +111,31 @@ class UninstallPage(QWidget):
 
     # ------------------------------------------------------------- state
 
+    def _apply_button_icons(self) -> None:
+        """Attach themed icons to the page buttons."""
+        icons.apply(self.refresh_btn, "refresh")
+        icons.apply(self.uninstall_btn, "uninstall", role="warning")
+        icons.apply(self.search_btn, "scan")
+        icons.apply(self.del_btn, "delete", role="error")
+
+    def refresh_icons(self) -> None:
+        """Re-apply every icon after a dark/light theme switch."""
+        self._apply_button_icons()
+
     def on_busy(self, busy: bool) -> None:
+        """Disable action buttons while an operation is running."""
         for b in (self.refresh_btn, self.uninstall_btn,
                   self.search_btn, self.del_btn):
             b.setEnabled(not busy)
 
     def on_show(self) -> None:
+        """Called when the page becomes visible."""
         pass
 
     # ---------------------------------------------------------- actions
 
     def refresh(self) -> None:
+        """Refresh the installed applications list."""
         if self.host.busy:
             return
         self.host.set_busy(True, mode="indeterminate")
@@ -123,17 +165,17 @@ class UninstallPage(QWidget):
         self.host.log(t("log.apps_loaded", n=len(apps)))
 
     def uninstall_selected(self) -> None:
+        """Launch the uninstaller for the selected application."""
         app = selected_one(self.tree, self.apps)
         if not app:
             return
         if not app["uninstall"]:
-            QMessageBox.warning(self, APP_NAME, t("msg.no_uninstall_cmd"))
+            app_info(self, "warning", APP_NAME, t("msg.no_uninstall_cmd"))
             return
-        if QMessageBox.question(
-                self, APP_NAME,
-                t("msg.run_uninstaller", name=app["name"],
-                  cmd=app["uninstall"]),
-                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+        if not app_confirm(self, "warning", APP_NAME,
+                           t("msg.run_uninstaller", name=app["name"],
+                             cmd=app["uninstall"]),
+                           yes_text=t("btn.uninstall_yes")):
             return
         # No shell=True: the command is split, the executable is verified
         # and launched with an argument list, off the UI thread.
@@ -151,15 +193,16 @@ class UninstallPage(QWidget):
             self.host.set_status(t("status.uninstaller_launched", name=name))
         else:
             self.host.log(t("log.uninstaller_error", name=name, msg=msg))
-            QMessageBox.critical(self, APP_NAME,
-                                 t("msg.uninstaller_error", msg=msg))
+            app_info(self, "critical", APP_NAME,
+                     t("msg.uninstaller_error", msg=msg))
 
     def _launch_error(self, app, exc) -> None:
         self.host.set_busy(False)
-        QMessageBox.critical(self, APP_NAME,
-                             t("msg.uninstaller_error", exc=exc))
+        app_info(self, "critical", APP_NAME,
+                 t("msg.uninstaller_error", exc=exc))
 
     def search_leftovers(self) -> None:
+        """Search for leftover files and registry keys after uninstall."""
         app = selected_one(self.tree, self.apps)
         if not app:
             return
@@ -174,7 +217,8 @@ class UninstallPage(QWidget):
     def _leftover_error(self, exc) -> None:
         self.host.set_busy(False)
         self.info.setText("")
-        QMessageBox.critical(self, APP_NAME, t("msg.leftover_error", exc=exc))
+        app_info(self, "critical", APP_NAME,
+                 t("msg.leftover_error", exc=exc))
 
     def _leftover_done(self, name, results) -> None:
         self.host.set_busy(False)
@@ -183,8 +227,8 @@ class UninstallPage(QWidget):
             t("uninstall.leftover_count", name=name, n=len(results))
             if results else "")
         if not results:
-            QMessageBox.information(self, APP_NAME,
-                                    t("msg.no_leftovers", name=name))
+            app_info(self, "info", APP_NAME,
+                     t("msg.no_leftovers", name=name))
             return
         self.host.log(t("log.leftovers_found", name=name, n=len(results)))
         win, box = readonly_toplevel(
@@ -197,18 +241,18 @@ class UninstallPage(QWidget):
         win.exec()
 
     def delete_leftovers(self) -> None:
+        """Delete the found leftover files and registry keys."""
         if not self.leftovers:
-            QMessageBox.information(self, APP_NAME,
-                                    t("msg.search_first",
-                                      btn=t("btn.find_leftovers")))
+            app_info(self, "info", APP_NAME,
+                     t("msg.search_first", btn=t("btn.find_leftovers")))
             return
         msg = (t("msg.delete_generic_header")
                + "\n".join(f"  {p}" for _, p in self.leftovers[:20]))
         if len(self.leftovers) > 20:
             msg += "\n" + t("msg.and_n_more", n=len(self.leftovers) - 20)
         msg += "\n\n" + t("ui.continue_q")
-        if QMessageBox.question(self, APP_NAME, msg,
-                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+        if not app_confirm(self, "danger", APP_NAME, msg,
+                           yes_text=t("btn.delete_yes")):
             return
         self.host.set_busy(True, mode="indeterminate")
         run_async(self, self._delete_leftovers_worker,

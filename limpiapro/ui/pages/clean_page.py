@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
 
 from ...i18n import t
 from ...utils import format_size
+from .. import icons
+from ..widgets import FlowLayout
 
 
 class CategoryRow(QWidget):
@@ -43,8 +45,14 @@ class CategoryRow(QWidget):
         self.check.toggled.connect(lambda on, k=cat.key: self.toggled.emit(k, on))
         lay.addWidget(self.check, 0, Qt.AlignTop)
 
-        self.icon_lbl = QLabel(cat.icon)
-        self.icon_lbl.setFixedWidth(26)
+        # Themed SVG icon instead of the legacy emoji glyph.
+        self._icon_name = icons.CATEGORY_ICONS.get(cat.key, "file")
+        self.icon_lbl = QLabel()
+        self.icon_lbl.setPixmap(icons.pixmap(self._icon_name,
+                                             icons._ICON_SIZE, role="muted"))
+        self.icon_lbl.setFixedSize(icons._ICON_SIZE + 4,
+                                   icons._ICON_SIZE + 4)
+        self.icon_lbl.setAlignment(Qt.AlignTop)
         lay.addWidget(self.icon_lbl, 0, Qt.AlignTop)
 
         text_col = QVBoxLayout()
@@ -113,12 +121,13 @@ class CleanPage(QWidget):
         lay.addWidget(subtitle)
 
         # ------------------------------------------------------- toolbar
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(8)
+        # FlowLayout: wraps to a second line on narrow windows instead of
+        # clipping the button text.
+        toolbar = FlowLayout(spacing=8)
+        # Single smart toggle: shows the action it will perform
+        # ("Seleccionar todo" / "Deseleccionar todo").
         self.all_btn = QPushButton(t("btn.select_all"))
-        self.all_btn.clicked.connect(lambda: self.toggle_all(True))
-        self.none_btn = QPushButton(t("btn.none"))
-        self.none_btn.clicked.connect(lambda: self.toggle_all(False))
+        self.all_btn.clicked.connect(self._toggle_selection)
         self.preview_btn = QPushButton(t("btn.preview"))
         self.preview_btn.clicked.connect(self.host.preview_clean)
         self.winapp_btn = QPushButton(t("btn.winapp_rules"))
@@ -128,12 +137,11 @@ class CleanPage(QWidget):
         self.clean_btn = QPushButton(t("btn.clean_selected"))
         self.clean_btn.setProperty("kind", "primary")
         self.clean_btn.clicked.connect(self.host.confirm_clean)
-        for b in (self.all_btn, self.none_btn, self.preview_btn,
-                  self.winapp_btn, self.cancel_btn):
+        for b in (self.all_btn, self.preview_btn,
+                  self.winapp_btn, self.cancel_btn, self.clean_btn):
             toolbar.addWidget(b)
-        toolbar.addStretch(1)
-        toolbar.addWidget(self.clean_btn)
         lay.addLayout(toolbar)
+        self._apply_button_icons()
 
         # ------------------------------------------------------ card list
         scroll = QScrollArea()
@@ -168,6 +176,21 @@ class CleanPage(QWidget):
 
     # ----------------------------------------------------------- helpers
 
+    def _apply_button_icons(self) -> None:
+        """Attach themed icons to the toolbar buttons."""
+        self._update_toggle_button()
+        icons.apply(self.preview_btn, "preview")
+        icons.apply(self.winapp_btn, "package")
+        icons.apply(self.cancel_btn, "cancel", role="error")
+        icons.apply(self.clean_btn, "clean", role="on_accent")
+
+    def refresh_icons(self) -> None:
+        """Re-apply every icon after a dark/light theme switch."""
+        self._apply_button_icons()
+        for row in self.rows.values():
+            row.icon_lbl.setPixmap(
+                icons.pixmap(row._icon_name, icons._ICON_SIZE, role="muted"))
+
     def _build_rows(self) -> None:
         """(Re)build one row per category from host.categories."""
         while self._list_lay.count() > 1:
@@ -181,6 +204,26 @@ class CleanPage(QWidget):
             row.toggled.connect(lambda _k, _on: self.update_total())
             self._list_lay.insertWidget(self._list_lay.count() - 1, row)
             self.rows[cat.key] = row
+
+    def _all_selected(self) -> bool:
+        """True when every category row is checked."""
+        return bool(self.rows) and all(r.is_checked()
+                                       for r in self.rows.values())
+
+    def _toggle_selection(self) -> None:
+        """Select everything, or clear everything when all is selected."""
+        self.toggle_all(not self._all_selected())
+
+    def _update_toggle_button(self) -> None:
+        """Sync the smart toggle's label and icon with the current state."""
+        if not hasattr(self, "all_btn"):
+            return
+        if self._all_selected():
+            self.all_btn.setText(t("btn.select_none"))
+            icons.apply(self.all_btn, "select_none")
+        else:
+            self.all_btn.setText(t("btn.select_all"))
+            icons.apply(self.all_btn, "select_all")
 
     def toggle_all(self, value: bool) -> None:
         for row in self.rows.values():
@@ -196,6 +239,7 @@ class CleanPage(QWidget):
     def update_total(self) -> None:
         total = sum(c.size for c in self.selected_categories())
         self.total_lbl.setText(t("clean.total", size=format_size(total)))
+        self._update_toggle_button()
 
     def on_category_updated(self, key: str) -> None:
         """Refresh one category's row as soon as its scan finishes."""
@@ -216,7 +260,7 @@ class CleanPage(QWidget):
 
     def on_busy(self, busy: bool) -> None:
         """Disable everything except Cancel while an operation runs."""
-        for b in (self.all_btn, self.none_btn, self.preview_btn,
+        for b in (self.all_btn, self.preview_btn,
                   self.winapp_btn, self.clean_btn):
             b.setEnabled(not busy)
         self.cancel_btn.setEnabled(busy)

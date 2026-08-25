@@ -8,4 +8,10 @@ create import cycles.
 
 The legacy app (`limpiador.py --legacy`) still works through
 `limpiapro.app`; the PySide6 replica runs by default via
-`limpiapro.app_qt`."""
+`limpiapro.app_qt`.
+
+Design Principle:
+    This package serves as a namespace container. It intentionally does
+    not import any heavy modules to prevent circular dependencies and
+    to keep the package lightweight for introspection tools.
+"""

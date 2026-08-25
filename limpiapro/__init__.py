@@ -6,7 +6,7 @@ LimpiaPro.spec).
 """
 
 APP_NAME = "LimpiaPro"
-APP_VERSION = "2.3"
+APP_VERSION = "2.4"
 
 # Read chunk size for full-file hashing (duplicates module). 1 MiB keeps
 # the per-call Python overhead negligible while hashlib updates in C.

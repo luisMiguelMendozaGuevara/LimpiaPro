@@ -1,9 +1,21 @@
 """Page: Windows Update leftovers (WinSxS / DISM) (replica of the legacy
 update page).
 
-Measures the component store size and runs DISM analyze/cleanup commands
-on a worker thread. DISM output arrives in the operating system language
-(out of the app's control) and is appended verbatim to the console box."""
+This module implements the Windows Update cleanup UI for PySide6. It
+wraps the DISM (Deployment Image Servicing and Management) command-line
+tool to analyze and clean the WinSxS component store.
+
+Architecture:
+    - Measures the component store size (C:\Windows\WinSxS).
+    - Runs DISM analyze/cleanup commands on a worker thread.
+    - DISM output arrives in the operating system language (out of the
+      app's control) and is appended verbatim to the console box.
+
+Design Principles:
+1. Safety: DISM is a system-level tool; all operations require admin.
+2. Transparency: Raw DISM output is shown to the user.
+3. Thread Safety: DISM runs on a background thread with a 30-minute timeout.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +24,6 @@ import subprocess
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
@@ -22,11 +33,18 @@ from PySide6.QtWidgets import (
 from ... import APP_NAME
 from ...i18n import t
 from ...utils import _folder_size, format_size
+from .. import icons
 from ..widgets import run_async
 
 
 class UpdatePage(QWidget):
-    """WinSxS component store analyzer and cleaner (DISM wrapper)."""
+    """WinSxS component store analyzer and cleaner (DISM wrapper).
+
+    Attributes:
+        host: The main window host.
+        out: The QPlainTextEdit widget displaying DISM output.
+        size_lbl: The label displaying the WinSxS folder size.
+    """
 
     def __init__(self, host, parent: QWidget | None = None):
         super().__init__(parent)
@@ -57,6 +75,7 @@ class UpdatePage(QWidget):
         bar.addStretch(1)
         bar.addWidget(self.size_lbl)
         lay.addLayout(bar)
+        self._apply_button_icons()
 
         self.out = QPlainTextEdit()
         self.out.setReadOnly(True)
@@ -71,32 +90,48 @@ class UpdatePage(QWidget):
 
     # ------------------------------------------------------------- state
 
+    def _apply_button_icons(self) -> None:
+        """Attach themed icons to the page buttons."""
+        icons.apply(self.analyze_btn, "analyze")
+        icons.apply(self.clean_btn, "shield", role="warning")
+
+    def refresh_icons(self) -> None:
+        """Re-apply every icon after a dark/light theme switch."""
+        self._apply_button_icons()
+
     def on_busy(self, busy: bool) -> None:
+        """Disable action buttons while an operation is running."""
         self.analyze_btn.setEnabled(not busy)
         self.clean_btn.setEnabled(not busy)
 
     def on_show(self) -> None:
+        """Called when the page becomes visible."""
         pass
 
     # ---------------------------------------------------------- actions
 
     def _measure_error(self, exc) -> None:
+        """Handle WinSxS measurement errors."""
         self.host.set_busy(False)
         self.size_lbl.setText(t("update.not_available"))
         self.host.log(t("log.winsxs_error", exc=exc))
 
     def _log_out(self, text: str) -> None:
+        """Append text to the output console and auto-scroll."""
         self.out.appendPlainText(text)
         bar = self.out.verticalScrollBar()
         bar.setValue(bar.maximum())
 
     def _measure(self):
+        """Measure the size of the WinSxS folder."""
         return (_folder_size(r"C:\Windows\WinSxS"),)
 
     def _measure_done(self, size) -> None:
+        """Handle WinSxS measurement completion."""
         self.size_lbl.setText(t("update.winsxs_size", size=format_size(size)))
 
     def _run_dism(self, args, label) -> None:
+        """Run a DISM command with the given arguments."""
         if self.host.busy:
             return
         self.host.set_busy(True, mode="indeterminate")
@@ -105,11 +140,19 @@ class UpdatePage(QWidget):
                   on_error=self._dism_error)
 
     def _dism_error(self, exc) -> None:
+        """Handle DISM execution errors."""
         self.host.set_busy(False)
         self._log_out(t("update.error", exc=exc))
 
     def _dism_worker(self, args):
-        """Run DISM with a 30-minute timeout and return its output."""
+        """Run DISM with a 30-minute timeout and return its output.
+
+        Note:
+            The nosec B603 comment is required because Bandit flags
+            subprocess.run with variable arguments. However, the binary
+            is fixed ("dism") and the arguments are controlled by the
+            application, so there is no injection risk.
+        """
         try:
             result = subprocess.run(  # nosec B603 - fixed binary + arg list
                 ["dism", "/online", "/cleanup-image"] + args,
@@ -122,16 +165,20 @@ class UpdatePage(QWidget):
         return (out,)
 
     def _dism_done(self, out) -> None:
+        """Handle DISM command completion."""
         self.host.set_busy(False)
         self._log_out(out or t("update.no_output"))
         self._log_out(t("update.finished"))
 
     def analyze(self) -> None:
+        """Analyze the component store for cleanup potential."""
         self._run_dism(["/AnalyzeComponentStore"], t("update.analyzing"))
 
     def clean(self) -> None:
-        if QMessageBox.question(
-                self, APP_NAME, t("msg.update_clean_confirm"),
-                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+        """Clean the component store after confirmation."""
+        from ..widgets import app_confirm
+        if not app_confirm(self, "warning", APP_NAME,
+                           t("msg.update_clean_confirm"),
+                           yes_text=t("btn.clean_yes")):
             return
         self._run_dism(["/StartComponentCleanup"], t("update.cleaning"))

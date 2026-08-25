@@ -6,7 +6,18 @@ traversal (_iter_targets) feeds scanning, preview listing and deletion, so
 the same matching logic (masks, RECURSE, ExcludeKey) applies to all three.
 
 Category labels and descriptions shown in the UI are translated through
-i18n.t() keys ("cat.*")."""
+i18n.t() keys ("cat.*").
+
+Architecture Overview:
+    - CleanCategory is the atomic unit of work. It encapsulates:
+      * What to clean (locations or winapp2 rules)
+      * How to measure it (scan)
+      * What files are involved (list_files with snapshot)
+      * How to delete it (clean with parallel execution)
+    - build_categories() constructs the default set with i18n translations.
+    - Snapshot integrity (P0-3): list_files() captures an immutable snapshot
+      of targets, ensuring clean() deletes exactly what the preview showed.
+"""
 
 import os
 import threading
@@ -28,8 +39,21 @@ from .winapp2 import default_winapp_file, parse_winapp_rules
 
 
 def user_dirs():
-    """Cleaning locations as %ENV% templates (expanded on use, so they work
-    for any user profile)."""
+    """Return a dictionary of common user/system directories as %ENV% templates.
+    
+    These templates are expanded at runtime via os.path.expandvars(), ensuring
+    they work correctly regardless of the user profile or system configuration.
+    
+    Returns:
+        dict[str, str]: Mapping of category keys to environment-variable-templated paths.
+        
+    Example:
+        >>> dirs = user_dirs()
+        >>> dirs["temp"]
+        '%TEMP%'
+        >>> os.path.expandvars(dirs["temp"])
+        'C:\\\\Users\\\\john\\\\AppData\\\\Local\\\\Temp'
+    """
     return {
         "temp": r"%TEMP%",
         "win_temp": r"C:\Windows\Temp",
@@ -50,9 +74,25 @@ def user_dirs():
 
 
 def browser_cache_folders(base):
-    """Cache folder candidates for every profile under a Chromium browser's
-    User Data directory (the folders simply don't exist for profiles that
-    never created them, so listing them all is cheap and safe)."""
+    """Generate cache folder candidates for Chromium-based browsers.
+    
+    For each profile directory under the browser's User Data folder, this
+    function yields a list of cache-related subdirectories. Profiles that
+    never created these folders simply don't have them, so listing all
+    candidates is cheap and safe (non-existent paths are filtered later).
+    
+    Args:
+        base (str): Path to the browser's User Data directory (e.g.,
+                    '%LOCALAPPDATA%\\Google\\Chrome\\User Data').
+                    
+    Returns:
+        list[str]: List of absolute paths to cache folders across all profiles.
+        
+    Notes:
+        - Cache folders include: Cache, Code Cache, GPUCache, Service Worker caches,
+          ShaderCache, DawnCache, blob_storage, and CachedData.
+        - The function silently ignores profiles that don't exist or can't be read.
+    """
     cache_folders = [
         "Cache", "Cache/Cache_Data", "Code Cache", "Code Cache/JS Cache",
         "GPUCache", "Service Worker/CacheStorage", "Service Worker/ScriptCache",
@@ -76,12 +116,43 @@ def browser_cache_folders(base):
 
 class CleanCategory:
     """One cleaning category with its source locations or winapp2 rules.
-
-    scan() measures (size, files) with os.scandir-based stats; list_files()
-    yields the preview; clean() deletes the collected targets in parallel.
-    `recycle_bin` categories are special-cased by the app (shell API)."""
+    
+    This is the central abstraction for all cleanup operations. It encapsulates:
+    - **What to clean**: Either a list of filesystem locations (paths with %ENV%
+      templates and wildcards) or a set of winapp2 rules (FileKey directives).
+    - **How to measure**: scan() calculates total size and file count.
+    - **What's involved**: list_files() generates a preview and creates an
+      immutable snapshot of targets.
+    - **How to delete**: clean() removes all targets in parallel, respecting
+      the snapshot to prevent race conditions.
+    
+    Special Cases:
+        - `recycle_bin` categories are handled by the shell API (empty_recycle_bin),
+          not standard file deletion.
+        - Winapp2 rules support masks, recursion (RECURSE), and exclusions
+          (ExcludeKey), which are applied during scanning and deletion.
+    
+    Thread Safety:
+        - scan(), list_files(), and clean() are designed to run on background
+          threads (QThread workers in the controller).
+        - The _snapshot attribute ensures clean() deletes exactly what was
+          collected by list_files(), preventing race conditions where new
+          files created between preview and deletion are accidentally removed.
+    """
 
     def __init__(self, key, label, description, locations, icon="\U0001F5D1"):
+        """Initialize a CleanCategory instance.
+        
+        Args:
+            key (str): Unique identifier for the category (e.g., "temp", "browser").
+            label (str): Human-readable name for display in the UI.
+            description (str): Detailed explanation of what the category cleans.
+            locations (list[str]): List of filesystem paths (with %ENV% templates
+                                   and optional wildcards) or an empty list if
+                                   the category uses winapp2 rules.
+            icon (str, optional): Unicode emoji or icon identifier for the UI.
+                                  Defaults to trash can emoji.
+        """
         self.key = key
         self.label = label
         self.description = description
@@ -94,10 +165,22 @@ class CleanCategory:
         self.files = 0
         self.errors = 0
         self.delete_errors = []
+        # SNAPSHOT INTEGRITY (P0-3): This holds the immutable list of targets
+        # collected by list_files(). clean() uses this snapshot to ensure it
+        # deletes exactly what the preview showed, preventing race conditions
+        # where new files created between preview and deletion are removed.
         self._snapshot = None
 
     def _locations_existing(self):
-        """Expand %ENV% vars and glob wildcards, keeping existing paths only."""
+        """Expand %ENV% variables and glob wildcards, returning only existing paths.
+        
+        This helper ensures that scan/clean operations only process paths that
+        actually exist on the filesystem, avoiding errors from non-existent
+        directories or files.
+        
+        Returns:
+            list[str]: List of absolute paths that exist after expansion.
+        """
         out = []
         for loc in self.locations:
             for h in glob_like(os.path.expandvars(loc)):
@@ -107,8 +190,21 @@ class CleanCategory:
 
     @staticmethod
     def _match_re(name: str, patterns_re) -> bool:
-        """Case-insensitive filename match against precompiled regexes
-        (fnmatch.translate). Empty pattern lists match everything."""
+        """Case-insensitive filename match against precompiled regexes.
+        
+        Args:
+            name (str): Filename to match (e.g., "cache.tmp").
+            patterns_re (tuple[re.Pattern]): Precompiled regex patterns from
+                                             fnmatch.translate(). Empty tuple
+                                             matches everything (wildcard "*").
+                                             
+        Returns:
+            bool: True if the filename matches any pattern, or if patterns_re is empty.
+            
+        Notes:
+            - Empty pattern lists match everything (equivalent to wildcard "*").
+            - Patterns are precompiled for performance (avoiding repeated fnmatch calls).
+        """
         if not patterns_re:
             return True
         for rx in patterns_re:
@@ -117,14 +213,23 @@ class CleanCategory:
         return False
 
     def _rule_roots(self):
-        """Yield (rule, existing_root) for each winapp2 rule.
-
-        The root is normalized and absolutized exactly once here:
-        is_excluded() (winapp2) then receives absolute paths and only needs
-        normcase, avoiding one GetFullPathName syscall per file. Roots that
-        are themselves junctions are skipped: walking one would traverse
-        the junction target (os.walk descends into junctions) and generate
-        targets that live outside the rule's physical tree."""
+        """Yield (rule, existing_root) pairs for each winapp2 rule.
+        
+        This generator normalizes and absolutizes the root path exactly once,
+        optimizing performance by avoiding repeated GetFullPathName syscalls.
+        Junctions (reparse points) are skipped to prevent traversing into
+        their targets, which could lead to counting/deleting files outside
+        the rule's physical tree.
+        
+        Yields:
+            tuple[WinAppRule, str]: (rule, normalized_absolute_root) for each
+                                    existing, non-junction root.
+                                    
+        Notes:
+            - Junctions are detected with os.path.isjunction() and skipped.
+            - Roots are normalized with os.path.normcase() and os.path.abspath().
+            - Only existing roots are yielded (os.path.exists check).
+        """
         for rule in self.rules or []:
             root = os.path.normcase(os.path.abspath(
                 os.path.expandvars(rule.root)))
@@ -132,13 +237,31 @@ class CleanCategory:
                 yield rule, root
 
     def _iter_targets(self, should_cancel=None):
-        """Iterate (rule_or_None, path) over everything the category would
-        clean.
-
-        One single traversal for scan, preview and deletion. Winapp2 rules
-        apply masks, recursion and ExcludeKey exclusions; plain categories
-        only touch the top level of each location (folders get removed
-        whole when cleaning)."""
+        """Iterate over all targets the category would clean.
+        
+        This is the single source of truth for scanning, preview, and deletion.
+        It applies winapp2 masks, recursion flags, and ExcludeKey exclusions
+        consistently across all operations. For plain categories (no rules),
+        it only touches the top level of each location (folders are removed
+        whole during cleaning).
+        
+        Args:
+            should_cancel (callable, optional): Zero-argument function that
+                                                returns True to stop iteration.
+                                                Used for cooperative cancellation.
+                                                
+        Yields:
+            tuple[WinAppRule | None, str]: (rule_or_None, absolute_path) for
+                                           each target. rule_or_None is None
+                                           for plain categories.
+                                           
+        Notes:
+            - Cooperative cancellation: Checks should_cancel() between iterations.
+            - Winapp2 rules: Applies masks (patterns_re), recursion (RECURSE flag),
+              and exclusions (ExcludeKey) via rule.is_excluded().
+            - Plain categories: Only top-level items in each location are yielded.
+            - Junctions: Never descended into (handled by _iter_tree_files).
+        """
         if self.rules:
             for rule, root in self._rule_roots():
                 if should_cancel and should_cancel():
@@ -173,11 +296,26 @@ class CleanCategory:
 
     def _scan_rules(self, on_progress=None, should_cancel=None):
         """Scan winapp2-rule targets: measure each matched file/folder.
-
-        Each category is scanned on its own thread; roots are walked
-        serially inside it (extra parallelism gains nothing on a regular
-        disk). File sizes come from the DirEntry stat of the shared
-        traversal, so no extra stat syscall is paid per file."""
+        
+        Each category is scanned on its own thread; roots are walked serially
+        inside it (extra parallelism gains nothing on a regular disk). File
+        sizes come from the DirEntry stat of the shared traversal, so no
+        extra stat syscall is paid per file.
+        
+        Args:
+            on_progress (callable, optional): Function called with file count
+                                              every PROGRESS_RULES files.
+            should_cancel (callable, optional): Zero-argument function that
+                                                returns True to stop scanning.
+                                                
+        Returns:
+            int: Total size in bytes of all matched targets.
+            
+        Notes:
+            - Progress reporting: Every PROGRESS_RULES files (default: 100).
+            - Cooperative cancellation: Checks should_cancel() between roots.
+            - Error handling: OSError on individual files is silently ignored.
+        """
         self.size = 0
         self.files = 0
         for rule, root in self._rule_roots():
@@ -207,8 +345,26 @@ class CleanCategory:
         return self.size
 
     def scan(self, on_progress=None, should_cancel=None):
-        """Measure the category: total bytes and file count. Rule-based
-        categories use _scan_rules; plain ones use the fast scandir stats."""
+        """Measure the category: total bytes and file count.
+        
+        This is the primary method for analyzing how much space can be freed.
+        Rule-based categories use _scan_rules (winapp2 logic); plain categories
+        use _fast_folder_stats (optimized scandir traversal).
+        
+        Args:
+            on_progress (callable, optional): Function called with file count
+                                              periodically during scanning.
+            should_cancel (callable, optional): Zero-argument function that
+                                                returns True to stop scanning.
+                                                
+        Returns:
+            int: Total size in bytes of all targets in the category.
+            
+        Notes:
+            - Audit logging: Logs operation start and completion with results.
+            - Cooperative cancellation: Respects should_cancel() between locations.
+            - Performance: Uses cached DirEntry stats to avoid redundant syscalls.
+        """
         audit.log_operation(
             operation="scan",
             category=self.key,
@@ -248,11 +404,27 @@ class CleanCategory:
     def list_files(self, limit=1000):
         """Return (paths, scanned_count) for the preview dialog and SNAPSHOT
         the exact target set (P0-3).
-
+        
         The preview shows the first `limit` paths, but the snapshot keeps
         the full list so clean() deletes exactly what was collected here
         (revalidated per-path by the safety layer), instead of re-walking
-        the filesystem and picking up new files created in between."""
+        the filesystem and picking up new files created in between.
+        
+        Args:
+            limit (int, optional): Maximum number of paths to return for preview.
+                                   Defaults to 1000 to prevent UI overload.
+                                   
+        Returns:
+            tuple[list[str], int]: (preview_paths, total_scanned_count)
+            
+        Notes:
+            - SNAPSHOT INTEGRITY (P0-3): This method creates an immutable snapshot
+              of all targets. clean() uses this snapshot to ensure it deletes
+              exactly what the preview showed, preventing race conditions.
+            - The snapshot is stored in self._snapshot and consumed by clean().
+            - If no preview is requested before clean(), clean() will generate
+              a fresh snapshot internally.
+        """
         targets = list(self._iter_targets())
         self._snapshot = targets
         scanned = len(targets)
@@ -260,9 +432,22 @@ class CleanCategory:
         return files, scanned
 
     def _collect(self):
-        """Return (targets, remove_roots) to delete. Prefers the snapshot
-        taken by list_files (clean = what the preview showed); falls back
-        to a fresh walk when no preview happened."""
+        """Return (targets, remove_roots) to delete.
+        
+        Prefers the snapshot taken by list_files (clean = what the preview
+        showed); falls back to a fresh walk when no preview happened. Also
+        collects remove_roots for REMOVESELF winapp2 rules.
+        
+        Returns:
+            tuple[list[str], list[str]]: (targets_to_delete, roots_to_remove_if_empty)
+            
+        Notes:
+            - Snapshot preference: Uses self._snapshot if available (from list_files).
+            - Fallback: If no snapshot, generates targets via _iter_targets().
+            - REMOVESELF: Collects roots of winapp2 rules with REMOVESELF flag.
+              These roots are removed after deletion if they're empty.
+            - Deduplication: Removes duplicate paths using dict.fromkeys().
+        """
         if self._snapshot is not None:
             targets = [p for _r, p in self._snapshot]
             remove_roots = [os.path.abspath(os.path.expandvars(r.root))
@@ -284,15 +469,39 @@ class CleanCategory:
     def clean(self, on_file=None, on_progress=None, target_bytes=0,
               should_cancel=None):
         """Delete every target of the category in parallel.
-
+        
         Targets are collected in one pass and deleted through _parallel_map
         (plain categories only remove the top level of each location;
         folders are deleted whole with rmtree). Returns (removed, errors,
         freed_bytes).
-
+        
         After cleaning there is no re-scan here: the UI re-analyzes
         everything when the cleanup finishes (analyze_all). Approximating
-        until that refresh avoids one extra full traversal."""
+        until that refresh avoids one extra full traversal.
+        
+        Args:
+            on_file (callable, optional): Function called with each target path
+                                          before deletion (for UI logging).
+            on_progress (callable, optional): Function called with progress
+                                              fraction (0.0 to 1.0) periodically.
+            target_bytes (int, optional): Expected total bytes to delete, used
+                                          for progress calculation. Defaults to 0.
+            should_cancel (callable, optional): Zero-argument function that
+                                                returns True to stop deletion.
+                                                
+        Returns:
+            tuple[int, int, int]: (removed_count, error_count, freed_bytes)
+            
+        Notes:
+            - Parallel deletion: Uses _parallel_map with ThreadPoolExecutor.
+            - Progress reporting: Chunked (every PROGRESS_DELETE files) to avoid
+              flooding the UI with updates.
+            - Audit logging: Records each deletion attempt with success/failure
+              details (P1-16).
+            - REMOVESELF: After deletion, attempts to remove roots marked with
+              REMOVESELF if they're empty. Respects safety layer.
+            - Error handling: Collects DeleteError objects for detailed reporting.
+        """
         targets, remove_roots = self._collect()
         if on_file:
             for target in targets:
@@ -371,7 +580,16 @@ class CleanCategory:
         return removed, errors, freed
 
     def error_summary(self) -> dict[str, int]:
-        """Count deleted-path failures per kind (for the UI/log report)."""
+        """Count deleted-path failures per kind (for the UI/log report).
+        
+        Returns:
+            dict[str, int]: Mapping of error kind (e.g., "access_denied", "in_use")
+                           to count of occurrences.
+                           
+        Notes:
+            - Error kinds are defined in utils._classify_error().
+            - Used by the UI to display a breakdown of deletion failures.
+        """
         out: dict[str, int] = {}
         for e in getattr(self, "delete_errors", []):
             out[e.kind] = out.get(e.kind, 0) + 1
@@ -380,9 +598,27 @@ class CleanCategory:
 
 def build_categories():
     """Build the default category set with translated labels/descriptions.
-
+    
     Labels are resolved through i18n.t() at build time (the language is
-    fixed at import, before any window exists)."""
+    fixed at import, before any window exists). This function constructs
+    the standard set of cleaning categories:
+    
+    - temp: Temporary files (TEMP, Windows\\Temp, Prefetch)
+    - browser: Browser caches (Edge, Chrome, Brave, Vivaldi, Opera, Firefox)
+    - recycle: Recycle Bin (special case, uses shell API)
+    - apps: Application caches (Explorer, CrashDumps, Windows Update, CBS logs)
+    - history: Recent files history
+    - winapp: Winapp2.ini rules (detected applications)
+    
+    Returns:
+        list[CleanCategory]: List of initialized CleanCategory instances.
+        
+    Notes:
+        - needs_admin flag is set for categories requiring elevated privileges.
+        - Browser cache detection: Scans for profile-specific cache folders.
+        - Winapp2 integration: Loads and parses winapp2.ini if it exists.
+        - i18n: Labels and descriptions are translated via i18n.t() keys.
+    """
     d = user_dirs()
     cats = []
 

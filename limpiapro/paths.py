@@ -1,22 +1,47 @@
 """Per-user and shared application directories.
 
-Caches, logs and user configuration must NOT live next to the executable:
-a normal user cannot write into "C:\\Program Files", so writes would fail
-silently and every user of a shared install would mix their data. The app
-directory (app_dir) keeps only static resources (winapp2.ini).
+This module manages the filesystem layout for application data, following
+Windows best practices for per-user and shared resources.
 
-  - user data (cache, logs, settings): %LOCALAPPDATA%\\LimpiaPro
-  - shared data (global winapp2 rules): %ProgramData%\\LimpiaPro
+Architecture Rationale:
+    Caches, logs and user configuration must NOT live next to the executable:
+    a normal user cannot write into "C:\\Program Files", so writes would fail
+    silently and every user of a shared install would mix their data. The app
+    directory (app_dir in utils.py) keeps only static resources (winapp2.ini).
+
+Directory Layout:
+    - **User data** (cache, logs, settings): %LOCALAPPDATA%\\LimpiaPro
+      This is per-user, writable, and isolated between users on the same machine.
+    - **Shared data** (global winapp2 rules): %ProgramData%\\LimpiaPro
+      This is machine-wide and accessible to all users.
+
+Functions:
+    - get_user_data_dir(): Per-user writable directory for cache, logs, settings.
+    - get_shared_data_dir(): Machine-wide directory for shared resources.
+    - get_logs_dir(): Writable directory for the error log (under user data).
+    - get_cache_file(): Path of the scan results cache (under user data).
 """
 
 import os
 
 
 def get_user_data_dir() -> str:
-    """Per-user writable directory for cache, logs and settings.
-
-    Falls back to the user home when LOCALAPPDATA is undefined. The
-    directory is created on first use."""
+    """Get the per-user writable directory for cache, logs and settings.
+    
+    Falls back to the user home when LOCALAPPDATA is undefined (non-Windows
+    or restricted environment). The directory is created on first use with
+    os.makedirs(exist_ok=True).
+    
+    Returns:
+        str: Absolute path to the per-user data directory.
+             Example: "C:\\Users\\John\\AppData\\Local\\LimpiaPro"
+             
+    Notes:
+        - Uses %LOCALAPPDATA% (e.g., C:\\Users\\John\\AppData\\Local).
+        - Fallback: os.path.expanduser("~") if LOCALAPPDATA is undefined.
+        - Directory creation: Silently ignores OSError if creation fails
+          (e.g., permission denied, read-only filesystem).
+    """
     base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
     data_dir = os.path.join(base, "LimpiaPro")
     try:
@@ -27,7 +52,20 @@ def get_user_data_dir() -> str:
 
 
 def get_shared_data_dir() -> str:
-    """Machine-wide directory for shared resources (winapp2.ini)."""
+    """Get the machine-wide directory for shared resources (winapp2.ini).
+    
+    This directory is accessible to all users on the machine and is used
+    for shared resources like the global winapp2.ini database.
+    
+    Returns:
+        str: Absolute path to the shared data directory.
+             Example: "C:\\ProgramData\\LimpiaPro"
+             
+    Notes:
+        - Uses %ProgramData% (e.g., C:\\ProgramData).
+        - Fallback: "C:\\ProgramData" if ProgramData is undefined.
+        - Directory creation: Silently ignores OSError if creation fails.
+    """
     base = os.environ.get("ProgramData", r"C:\ProgramData")
     data_dir = os.path.join(base, "LimpiaPro")
     try:
@@ -38,7 +76,20 @@ def get_shared_data_dir() -> str:
 
 
 def get_logs_dir() -> str:
-    """Writable directory for the error log."""
+    """Get the writable directory for the error log.
+    
+    This is a subdirectory of the user data directory, ensuring logs are
+    per-user and writable.
+    
+    Returns:
+        str: Absolute path to the logs directory.
+             Example: "C:\\Users\\John\\AppData\\Local\\LimpiaPro\\logs"
+             
+    Notes:
+        - Located under get_user_data_dir() / "logs".
+        - Directory creation: Silently ignores OSError if creation fails.
+        - Used by utils._errlog() and audit_log.AuditLogger.
+    """
     logs_dir = os.path.join(get_user_data_dir(), "logs")
     try:
         os.makedirs(logs_dir, exist_ok=True)
@@ -48,5 +99,17 @@ def get_logs_dir() -> str:
 
 
 def get_cache_file() -> str:
-    """Path of the scan results cache (under the user data dir)."""
+    """Get the path of the scan results cache (under the user data dir).
+    
+    This file stores the results of the last system scan (size and file count
+    per category) to enable instant startup on subsequent launches.
+    
+    Returns:
+        str: Absolute path to the cache file.
+             Example: "C:\\Users\\John\\AppData\\Local\\LimpiaPro\\limpiador_cache.json"
+             
+    Notes:
+        - Format: JSON with schema versioning (see CacheService in services/).
+        - Used by app.py (CleanerApp) and controller.py (LimpiaProController).
+    """
     return os.path.join(get_user_data_dir(), "limpiador_cache.json")

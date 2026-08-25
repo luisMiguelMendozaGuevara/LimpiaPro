@@ -1,10 +1,23 @@
 """Page: duplicate files finder (replica of the legacy duplicates page).
 
-Drives DuplicateScanner on a worker thread: the user picks a folder and a
-minimum size, results are shown as tree groups (one "original" plus its
-copies) and the selected copies get deleted after confirmation. Each file
-row carries its path as UserRole data so deletion never relies on the
-displayed tree text."""
+This module implements the duplicate file scanner UI for PySide6. It
+replicates the behavior of the legacy CustomTkinter duplicates page while
+providing a modern, native Windows experience.
+
+Architecture:
+    - Drives DuplicateScanner on a worker thread.
+    - The user picks a folder and a minimum size.
+    - Results are shown as tree groups (one "original" plus its copies).
+    - Selected copies get deleted after confirmation.
+    - Each file row carries its path as UserRole data so deletion never
+      relies on the displayed tree text.
+
+Design Principles:
+1. Safety: Deletion re-validates each file against the scan snapshot
+   (size + mtime) to prevent deleting modified files.
+2. Thread Safety: All scanner work happens on a background thread.
+3. User Control: The user explicitly selects which copies to delete.
+"""
 
 from __future__ import annotations
 
@@ -16,8 +29,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -26,11 +39,18 @@ from ... import APP_NAME
 from ...duplicates import DuplicateScanner
 from ...i18n import t
 from ...utils import _delete_path, _safe_size, format_size
-from ..widgets import fill_tree, item_data, make_tree, run_async
+from .. import icons
+from ..widgets import EmptyState, app_confirm, app_info, fill_tree, item_data, make_tree, run_async
 
 
 class DuplicatePage(QWidget):
-    """Duplicate file scanner page: folder picker, scan and delete."""
+    """Duplicate file scanner page: folder picker, scan and delete.
+
+    Attributes:
+        host: The main window host.
+        scanner: The DuplicateScanner instance (owned by host).
+        tree: The QTreeWidget displaying duplicate groups.
+    """
 
     def __init__(self, host, parent: QWidget | None = None):
         super().__init__(parent)
@@ -81,7 +101,12 @@ class DuplicatePage(QWidget):
                 ("size", t("col.size"), 90, "e"),
             ],
         )
-        lay.addWidget(self.tree, 1)
+        # Empty-state placeholder until the first scan finds groups.
+        self._empty = EmptyState("dupes", t("dupes.subtitle"))
+        self._tree_stack = QStackedWidget()
+        self._tree_stack.addWidget(self._empty)
+        self._tree_stack.addWidget(self.tree)
+        lay.addWidget(self._tree_stack, 1)
 
         # --------------------------------------------------------- bottom
         bottom = QHBoxLayout()
@@ -99,29 +124,45 @@ class DuplicatePage(QWidget):
         bottom.addStretch(1)
         bottom.addWidget(self.delete_btn)
         lay.addLayout(bottom)
+        self._apply_button_icons()
 
     # ------------------------------------------------------------- state
 
+    def _apply_button_icons(self) -> None:
+        """Attach themed icons to the page buttons."""
+        icons.apply(self.choose_btn, "folder")
+        icons.apply(self.scan_btn, "scan", role="on_accent")
+        icons.apply(self.delete_btn, "delete", role="error")
+
+    def refresh_icons(self) -> None:
+        """Re-apply every icon after a dark/light theme switch."""
+        self._apply_button_icons()
+        self._empty.refresh_icon()
+
     def on_busy(self, busy: bool) -> None:
+        """Disable action buttons while an operation is running."""
         self.scan_btn.setEnabled(not busy)
         self.delete_btn.setEnabled(not busy)
 
     def on_show(self) -> None:
+        """Called when the page becomes visible."""
         pass
 
     # ---------------------------------------------------------- actions
 
     def choose_folder(self) -> None:
+        """Open a folder picker dialog."""
         path = QFileDialog.getExistingDirectory(self, t("dialog.pick_folder"))
         if path:
             self.folder_edit.setText(path)
 
     def start_scan(self) -> None:
+        """Initiate the duplicate scan on a background thread."""
         if self.host.busy:
             return
         folder = self.folder_edit.text().strip()
         if not folder:
-            QMessageBox.information(self, APP_NAME, t("msg.dupes_no_folder"))
+            app_info(self, "info", APP_NAME, t("msg.dupes_no_folder"))
             return
         min_mb = int(self.min_combo.currentText().split()[0])
         self.host.set_status(t("status.dupes_scanning", folder=folder))
@@ -139,26 +180,31 @@ class DuplicatePage(QWidget):
         return self.host.scanner.scan(), None
 
     def _scan_error(self, exc) -> None:
+        """Handle scan errors."""
         self.host.set_busy(False)
         self.summary.setText("")
         self.host.set_status(t("status.dupes_failed"))
         self.host.log(t("log.dupes_error", exc=exc))
-        QMessageBox.critical(self, APP_NAME, t("msg.error_simple", exc=exc))
+        app_info(self, "critical", APP_NAME, t("msg.error_simple", exc=exc))
 
     def _done(self, groups, error) -> None:
+        """Handle scan completion."""
         self.host.set_busy(False)
         if error:
             self.summary.setText("")
             self.host.set_status(t("status.dupes_failed"))
             self.host.log(t("log.dupes_error", exc=error))
-            QMessageBox.critical(self, APP_NAME, t("msg.error_simple", exc=error))
+            app_info(self, "critical", APP_NAME,
+                     t("msg.error_simple", exc=error))
             return
         self.tree.clear()
         if not groups:
             self.host.set_status(t("status.dupes_none"))
             self.summary.setText(t("dupes.none_found"))
             self.info.setText("")
+            self._tree_stack.setCurrentWidget(self._empty)
             return
+        self._tree_stack.setCurrentWidget(self.tree)
         dup_count = sum(len(g) - 1 for g in groups)
         wasted = sum(_safe_size(g[0]) * (len(g) - 1) for g in groups)
         self.summary.setText(
@@ -186,10 +232,11 @@ class DuplicatePage(QWidget):
                         size=format_size(wasted)))
 
     def delete_selected(self) -> None:
+        """Delete the selected duplicate files after confirmation."""
         paths = [p for p in (item_data(i) for i in self.tree.selectedItems())
                  if isinstance(p, str)]
         if not paths:
-            QMessageBox.information(self, APP_NAME, t("msg.dupes_select"))
+            app_info(self, "info", APP_NAME, t("msg.dupes_select"))
             return
         msg = t("msg.delete_files_header") + "\n".join(paths[:15])
         if len(paths) > 15:
@@ -198,8 +245,8 @@ class DuplicatePage(QWidget):
                 + t("msg.space_to_free",
                     size=format_size(sum(_safe_size(p) for p in paths)))
                 + "\n\n" + t("ui.continue_q"))
-        if QMessageBox.question(self, APP_NAME, msg,
-                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+        if not app_confirm(self, "danger", APP_NAME, msg,
+                           yes_text=t("btn.delete_yes")):
             return
         self.host.set_busy(True, mode="indeterminate")
         snapshot = dict(getattr(self.host.scanner, "snapshot", {}))
@@ -208,7 +255,13 @@ class DuplicatePage(QWidget):
 
     def _delete_worker(self, paths, snapshot):
         """Delete the given paths, re-validating each one against the scan
-        snapshot (size + mtime). Returns (removed, errors, changed)."""
+        snapshot (size + mtime). Returns (removed, errors, changed).
+
+        SAFETY: This worker re-checks the file's size and modification time
+        against the snapshot taken during the scan. If the file has been
+        modified since the scan, it is skipped to prevent accidental
+        deletion of user data.
+        """
         removed = 0
         errors = 0
         changed = 0
@@ -232,6 +285,7 @@ class DuplicatePage(QWidget):
         return removed, errors, changed
 
     def _delete_done(self, removed, errors, changed) -> None:
+        """Handle deletion completion."""
         self.host.set_busy(False)
         self.host.set_status(t("status.dupes_deleted", n=removed, e=errors))
         self.host.log(t("log.dupes_deleted", n=removed, e=errors))
@@ -245,5 +299,5 @@ class DuplicatePage(QWidget):
                 p = item_data(child)
                 if isinstance(p, str) and not os.path.exists(p):
                     parent.removeChild(child)
-        QMessageBox.information(self, APP_NAME,
-                                t("msg.dupes_deleted", n=removed))
+        app_info(self, "success", APP_NAME,
+                 t("msg.dupes_deleted", n=removed))

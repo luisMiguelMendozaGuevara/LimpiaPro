@@ -1,9 +1,28 @@
 """PySide6 entry point (limpiador.py --qt).
 
-Mirrors the legacy bootstrap in app.py: re-elevate to administrator when
-possible (continuing without admin if UAC is declined), then run the Qt
-interface. Worker threads come from the controller, so the UI thread
-only renders."""
+This module is the bootstrap for the modern PySide6-based user interface.
+It mirrors the legacy bootstrap in app.py with the following responsibilities:
+
+1. **UAC Elevation**: Re-launches the application with administrator privileges
+   if not already elevated. If the user declines UAC, the app continues without
+   admin (some features will be limited).
+
+2. **Application Initialization**: Creates the QApplication, sets metadata
+   (name, version, icon), applies the theme, and shows the main window.
+
+3. **Smoke Testing**: Supports --smoke-test flag for CI/CD to verify the
+   application graph can be built without a window.
+
+Architecture Notes:
+    - Worker threads come from the controller, so the UI thread only renders.
+    - The main window is created synchronously on the UI thread.
+    - All heavy operations (scanning, deletion) are delegated to QThread workers
+      in the controller to keep the UI responsive.
+
+Entry Points:
+    - `main()`: Primary entry point called from limpiador.py when --qt is specified.
+    - `_maybe_elevate()`: Internal helper for UAC elevation.
+"""
 
 from __future__ import annotations
 
@@ -17,8 +36,23 @@ from .utils import _errlog, is_admin
 
 
 def _maybe_elevate() -> bool:
-    """Re-launch elevated when not admin; True when a new instance was
-    launched (the caller should return)."""
+    """Re-launch elevated when not admin; True when a new instance was launched.
+    
+    Uses ShellExecuteW with the "runas" verb to trigger UAC elevation. If the
+    user accepts, a new elevated instance is launched and this instance should
+    exit. If the user declines, the function returns False and the current
+    instance continues without admin privileges.
+    
+    Returns:
+        bool: True if a new elevated instance was launched (caller should exit),
+              False if elevation was declined or failed (caller should continue).
+              
+    Notes:
+        - Frozen detection: Handles both packaged (PyInstaller) and development modes.
+        - Argument passing: Uses subprocess.list2cmdline to properly escape arguments.
+        - Error logging: All elevation attempts are logged to limpiapro_error.log.
+        - ShellExecuteW return value: > 32 indicates success, <= 32 indicates failure.
+    """
     if is_admin():
         return False
     try:
@@ -39,7 +73,22 @@ def _maybe_elevate() -> bool:
 
 
 def main() -> None:
-    """PySide6 application entry point."""
+    """PySide6 application entry point.
+    
+    This is the main function called when the application is launched with
+    the --qt flag. It handles:
+    - Command-line flags (--version, --smoke-test)
+    - UAC elevation (if not admin)
+    - QApplication initialization
+    - Theme application
+    - Main window creation and display
+    
+    Notes:
+        - --version: Prints version and exits.
+        - --smoke-test: Builds the application graph without a window (for CI/CD).
+        - Error logging: All startup steps are logged to limpiapro_error.log.
+        - sys.exit(): Uses app.exec() return code for proper exit status.
+    """
     if "--version" in sys.argv:
         print(f"{APP_NAME} {APP_VERSION}")
         return
