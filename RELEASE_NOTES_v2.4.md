@@ -1,5 +1,14 @@
 # LimpiaPro v2.4
 
+## Descargas
+
+- **LimpiaPro.exe** — instalador-portable de un solo archivo (extraccion al
+  arrancar; la primera apertura tarda unos segundos).
+- **LimpiaProPortable.zip** — version portable OneDir: descomprime donde
+  quieras y ejecuta `LimpiaPro.exe`. Arranque casi instantaneo (sin
+  extraccion a %TEMP%) y menos falsos positivos de antivirus. Recomendado.
+- **LimpiaProDebug.exe** — variante con consola para diagnostico.
+
 ## Interfaz (PySide6)
 
 - **Sistema de iconos SVG propio**: 20+ iconos estilo Fluent renderizados en

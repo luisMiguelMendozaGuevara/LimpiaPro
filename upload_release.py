@@ -29,6 +29,23 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 DIST_DIR = PROJECT_ROOT / "dist"
 TAG_NAME = f"v{APP_VERSION}"
 ASSETS = (DIST_DIR / f"{APP_NAME}.exe", DIST_DIR / f"{APP_NAME}Debug.exe")
+PORTABLE_DIR = DIST_DIR / f"{APP_NAME}Portable"
+PORTABLE_ZIP = DIST_DIR / f"{APP_NAME}Portable.zip"
+
+
+def _zip_portable() -> Path:
+    """Zip the OneDir build (fast-start portable variant) for upload."""
+    import zipfile
+
+    if PORTABLE_ZIP.exists():
+        PORTABLE_ZIP.unlink()
+    with zipfile.ZipFile(PORTABLE_ZIP, "w", zipfile.ZIP_DEFLATED,
+                         compresslevel=9) as zf:
+        for base, _dirs, files in os.walk(PORTABLE_DIR):
+            for name in files:
+                full = Path(base) / name
+                zf.write(full, full.relative_to(PORTABLE_DIR.parent))
+    return PORTABLE_ZIP
 
 
 def _run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
@@ -37,12 +54,23 @@ def _run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
 
 
 def build_executables() -> None:
-    """Build both binaries and run their non-interactive smoke tests."""
-    for spec, exe in (("LimpiaPro.spec", ASSETS[0]), ("LimpiaProDebug.spec", ASSETS[1])):
+    """Build the three binaries and run their non-interactive smoke tests.
+
+    - LimpiaPro.spec        one-file exe (single-download asset)
+    - LimpiaProDebug.spec   console variant for troubleshooting
+    - LimpiaProPortable.spec OneDir folder zipped as the portable asset
+                            (starts instantly: no %TEMP% unpacking)
+    """
+    for spec, exe in (("LimpiaPro.spec", ASSETS[0]),
+                      ("LimpiaProDebug.spec", ASSETS[1]),
+                      ("LimpiaProPortable.spec", PORTABLE_DIR / f"{APP_NAME}.exe")):
         _run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", spec])
         if not exe.exists():
             raise RuntimeError(f"PyInstaller did not create {exe}")
         _run([str(exe), "--smoke-test"])
+    portable_zip = _zip_portable()
+    print(f"Portable zipped: {portable_zip} "
+          f"({portable_zip.stat().st_size} bytes)")
 
 
 def _api_request(
@@ -111,7 +139,8 @@ def publish_release(token: str) -> str:
     if assets is None:
         assets = []
     existing = {asset["name"]: asset["id"] for asset in assets}
-    for asset_path in ASSETS:
+    upload_assets = list(ASSETS) + [PORTABLE_ZIP]
+    for asset_path in upload_assets:
         if asset_path.name in existing:
             _api_request("DELETE", f"/releases/assets/{existing[asset_path.name]}", token)
             print(f"Asset anterior eliminado: {asset_path.name}")
