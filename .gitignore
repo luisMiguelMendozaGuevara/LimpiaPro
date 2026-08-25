@@ -23,3 +23,7 @@ venv/
 
 # Local agent documentation (not published)
 AGENTS.md
+
+# Verification builds
+dist_verify/
+build_verify/
