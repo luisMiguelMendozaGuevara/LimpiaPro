@@ -1,14 +1,14 @@
 @echo off
 setlocal EnableDelayedExpansion
-title LimpiaPro v2.3 - Release Tool
+title LimpiaPro v2.4 - Release Tool
 
 echo ============================================================
-echo   LimpiaPro v2.3 - Release Tool
+echo   LimpiaPro v2.4 - Release Tool
 echo   %date% %time%
 echo ============================================================
 echo.
 
-cd /d "%~dp0"
+cd /d "%~dp0.."
 
 echo Directorio: %CD%
 echo.
@@ -44,7 +44,7 @@ echo.
 echo Iniciando release_tool.py...
 echo.
 
-%PYTHON% release_tool.py %*
+%PYTHON% upload_release.py %*
 
 if %ERRORLEVEL%==0 (
     echo.
@@ -63,3 +63,4 @@ if %ERRORLEVEL%==0 (
 )
 
 pause
+
