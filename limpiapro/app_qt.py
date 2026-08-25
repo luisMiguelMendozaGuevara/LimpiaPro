@@ -98,8 +98,18 @@ def main() -> None:
         LimpiaProController()
         print(f"{APP_NAME} qt smoke test passed")
         return
+    screenshot = ""
+    for i, arg in enumerate(sys.argv):
+        if arg == "--screenshot" and i + 1 < len(sys.argv):
+            screenshot = sys.argv[i + 1]
+    if screenshot:
+        # Debug/CI: render the real window offscreen (no UAC, no console)
+        # and save a PNG, so the frozen build's actual look is verifiable.
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     _errlog("--- qt startup ---")
-    if not is_admin() and _maybe_elevate():
+    if (not screenshot and not is_admin()
+            and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
+            and _maybe_elevate()):
         return
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
@@ -118,4 +128,15 @@ def main() -> None:
     window = MainWindow()
     window.show()
     _errlog("qt: main window shown")
+    if screenshot:
+        from PySide6.QtCore import QTimer
+
+        def _grab() -> None:
+            window.grab().save(screenshot)
+            _errlog(f"qt: screenshot saved to {screenshot}")
+            app.quit()
+
+        QTimer.singleShot(2500, _grab)
+        app.exec()
+        return
     sys.exit(app.exec())

@@ -1,8 +1,16 @@
-# -*- mode: python ; coding: utf-8 -*-
+﻿# -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files
 
 datas = []
 datas += collect_data_files('customtkinter')
+# LimpiaPro data files: the PySide6 stylesheet (theme.py reads it next to
+# the compiled module), the community rules and the app icon (both are
+# located via app_dir() = the folder holding the exe when frozen).
+datas += [
+    ('limpiapro/ui/resources/style.qss', 'limpiapro/ui/resources'),
+    ('winapp2.ini', '.'),
+    ('assets/limpiadora.ico', 'assets'),
+]
 
 
 a = Analysis(
@@ -41,3 +49,4 @@ exe = EXE(
     entitlements_file=None,
     icon=['assets/limpiadora.ico'],
 )
+
