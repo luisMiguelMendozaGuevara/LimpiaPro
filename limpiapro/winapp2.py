@@ -46,7 +46,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .utils import app_dir, glob_like
+from .utils import glob_like
 
 # Windows registry hive mappings for Detect= conditions.
 _HIVES = {
@@ -119,7 +119,7 @@ class ExcludeKey:
         exact (str | None): Normalized, absolute path for FILE variant exclusions.
     """
 
-    __slots__ = ("root", "patterns", "recursive", "exact")
+    __slots__ = ("exact", "patterns", "recursive", "root")
 
     def __init__(self, root: str = "", patterns=("*",),
                  recursive: bool = False, exact: str | None = None):
@@ -235,8 +235,15 @@ class WinAppRule:
         excludes (tuple[ExcludeKey]): Tuple of ExcludeKey objects from the section.
     """
 
-    __slots__ = ("root", "recurse", "patterns", "patterns_lower",
-                 "_patterns_re", "remove_self", "excludes")
+    __slots__ = (
+        "_patterns_re",
+        "excludes",
+        "patterns",
+        "patterns_lower",
+        "recurse",
+        "remove_self",
+        "root",
+    )
 
     def __init__(self, root: str, recurse: bool = False,
                  patterns=("*",), remove_self: bool = False,

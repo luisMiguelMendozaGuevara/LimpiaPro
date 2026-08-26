@@ -1,4 +1,4 @@
-"""Page: duplicate files finder (replica of the legacy duplicates page).
+"""Page: duplicate files finder 
 
 This module implements the duplicate file scanner UI for PySide6. It
 replicates the behavior of the legacy CustomTkinter duplicates page while
@@ -40,7 +40,10 @@ from ...duplicates import DuplicateScanner
 from ...i18n import t
 from ...utils import _delete_path, _safe_size, format_size
 from .. import icons
-from ..widgets import EmptyState, app_confirm, app_info, fill_tree, item_data, make_tree, run_async
+from ..dialogs import app_confirm, app_info
+from ..empty_state import EmptyState
+from ..tree_helpers import fill_tree, item_data, make_tree
+from ..workers import run_async
 
 
 class DuplicatePage(QWidget):
@@ -223,8 +226,8 @@ class DuplicatePage(QWidget):
             specs.append((head, (str(len(group)), ""),
                           {"key": gid, "open": False}))
             specs.append((gid, t("dupes.original"), ("", ""), {}))
-            for dup in group[1:]:
-                specs.append((gid, dup, ("", ""), {"path": dup}))
+            specs.extend((gid, dup, ("", ""), {"path": dup})
+                         for dup in group[1:])
         fill_tree(self.tree, specs)
         self.host.set_status(t("status.dupes_done", n=len(groups)))
         self.host.log(t("log.dupes_done", folder=self.folder_edit.text(),

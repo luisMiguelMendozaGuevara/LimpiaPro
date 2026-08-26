@@ -1,14 +1,12 @@
-"""PySide6 theme: a faithful replica of the legacy customtkinter look.
+"""PySide6 theme for LimpiaPro.
 
-The palette below mirrors limpiapro/ui/legacy_tk/theme.py and the colors
-used across the legacy pages (root/sidebar/list backgrounds, the status
-colors GREEN/ORANGE/RED and the muted text), so the migrated interface
-looks the same. The stylesheet is rendered from resources/style.qss with
+The palette below matches the design language used across the pages
+(root/sidebar/list backgrounds, the status colors GREEN/ORANGE/RED and
+the muted text). The stylesheet is rendered from resources/style.qss with
 %TOKEN% placeholders substituted at runtime (dark/light + accent).
 
 Design Principles:
-1. Visual Consistency: The PySide6 UI must look identical to the legacy
-   CustomTkinter UI to avoid user disorientation.
+1. Visual Consistency: One design language for the whole interface.
 2. Dynamic Theming: Colors are substituted into a QSS template at runtime,
    allowing for dark/light modes and system accent color integration.
 3. Native Integration: Uses Windows APIs (DWM) to read system accent colors

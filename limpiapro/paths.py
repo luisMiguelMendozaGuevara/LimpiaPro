@@ -22,6 +22,7 @@ Functions:
     - get_cache_file(): Path of the scan results cache (under user data).
 """
 
+import contextlib
 import os
 
 
@@ -44,10 +45,8 @@ def get_user_data_dir() -> str:
     """
     base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
     data_dir = os.path.join(base, "LimpiaPro")
-    try:
+    with contextlib.suppress(OSError):
         os.makedirs(data_dir, exist_ok=True)
-    except OSError:
-        pass
     return data_dir
 
 
@@ -66,12 +65,10 @@ def get_shared_data_dir() -> str:
         - Fallback: "C:\\ProgramData" if ProgramData is undefined.
         - Directory creation: Silently ignores OSError if creation fails.
     """
-    base = os.environ.get("ProgramData", r"C:\ProgramData")
+    base = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
     data_dir = os.path.join(base, "LimpiaPro")
-    try:
+    with contextlib.suppress(OSError):
         os.makedirs(data_dir, exist_ok=True)
-    except OSError:
-        pass
     return data_dir
 
 
@@ -91,10 +88,8 @@ def get_logs_dir() -> str:
         - Used by utils._errlog() and audit_log.AuditLogger.
     """
     logs_dir = os.path.join(get_user_data_dir(), "logs")
-    try:
+    with contextlib.suppress(OSError):
         os.makedirs(logs_dir, exist_ok=True)
-    except OSError:
-        pass
     return logs_dir
 
 

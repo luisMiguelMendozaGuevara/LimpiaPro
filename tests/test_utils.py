@@ -145,14 +145,14 @@ def test_delete_path_refuses_protected_directory():
 
 def test_delete_measured_uses_safety_layer():
     from limpiapro.utils import _delete_measured
-    gone, freed, errors = _delete_measured(r"C:\Windows")
+    gone, _freed, errors = _delete_measured(r"C:\Windows")
     assert gone is False
     assert errors and errors[0].kind == "safety"
 
 
 def test_delete_measured_returns_error_detail_for_missing_guard(tmp_path):
     from limpiapro.utils import _delete_measured
-    gone, freed, errors = _delete_measured(str(tmp_path / "missing"))
+    gone, _freed, errors = _delete_measured(str(tmp_path / "missing"))
     assert gone is True  # already gone: not an error
     # A guarded refused target produces a structured error.
     assert isinstance(errors or [], list)

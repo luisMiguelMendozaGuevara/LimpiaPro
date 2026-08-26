@@ -31,6 +31,7 @@ Safety Guarantees:
     - Symlinks/junctions are removed without following their targets.
 """
 
+import contextlib
 import ctypes
 import errno
 import glob as globmod
@@ -46,7 +47,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from .paths import get_logs_dir
-from .safety import SafetyGuard, is_safe_delete_target  # noqa: F401  (re-export)
+from .safety import SafetyGuard, is_safe_delete_target
 
 # Progress reporting intervals: how many files between notifications.
 # Tuned to balance UI responsiveness with performance overhead.
@@ -373,7 +374,7 @@ def _parallel_map(func: Callable, items, workers: int | None = None) -> list:
         for f in futures:
             try:
                 out.append(f.result())
-            except Exception:
+            except Exception:  # noqa: PERF203 - one failed future must not abort the batch
                 out.append(None)
         return out
 
@@ -459,7 +460,7 @@ def iter_file_sizes(folder: str, should_cancel=None) -> Generator[tuple[str, int
     for entry in _iter_tree_files(folder, should_cancel):
         try:
             yield entry.path, entry.stat().st_size
-        except OSError:
+        except OSError:  # noqa: PERF203 - a bad entry must not abort the walk
             continue
 
 
@@ -562,10 +563,8 @@ def _make_writable(path: str) -> None:
         - Silently ignores OSError if the chmod fails (file may already be writable).
         - Called before retrying deletion after an access-denied error.
     """
-    try:
+    with contextlib.suppress(OSError):
         os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
-    except OSError:
-        pass
 
 
 def _safe_rmdir(path: str, errors: list[DeleteError] | None = None) -> None:

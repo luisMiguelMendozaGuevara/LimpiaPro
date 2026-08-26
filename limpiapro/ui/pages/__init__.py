@@ -1,4 +1,4 @@
-"""PySide6 pages package (replica of the legacy interface).
+"""PySide6 pages package 
 
 This package contains the individual page widgets for the PySide6
 interface. Each page corresponds to a tab in the main window's navigation

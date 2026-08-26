@@ -1,5 +1,5 @@
 """Page: Startup manager (startup apps, scheduled tasks, processes)
-(replica of the legacy startup page).
+
 
 This module implements the comprehensive startup and process management
 UI for PySide6. It replicates the behavior of the legacy CustomTkinter
@@ -42,16 +42,10 @@ from ...processes import get_processes, is_protected, kill_process
 from ...startup import get_disabled_startup, get_startup_apps, is_runonce_entry, set_startup
 from ...tasks import get_scheduled_tasks, set_task_enabled
 from .. import icons
+from ..dialogs import app_confirm, app_info
 from ..theme import GREEN_TEXT, ORANGE
-from ..widgets import (
-    app_confirm,
-    app_info,
-    fill_tree,
-    make_tree,
-    run_async,
-    selected_many,
-    selected_one,
-)
+from ..tree_helpers import fill_tree, make_tree, selected_many, selected_one
+from ..workers import run_async
 
 _ICON_PROVIDER = QFileIconProvider()
 

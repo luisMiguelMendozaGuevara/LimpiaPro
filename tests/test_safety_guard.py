@@ -192,7 +192,7 @@ def test_rule_walk_does_not_descend_junctions(tmp_path):
 
     targets = list(cat._iter_targets())
     assert not any(str(link) in path for _r, path in targets)
-    removed, errors, _freed = cat.clean()
+    _removed, errors, _freed = cat.clean()
     assert (target / "jfile.bin").exists()
     assert errors == 0
 

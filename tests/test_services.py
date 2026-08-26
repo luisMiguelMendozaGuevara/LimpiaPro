@@ -1,6 +1,6 @@
 """Tests for UI-independent services."""
 
-from limpiapro.services import CacheService, CleanupService, UiDispatcher
+from limpiapro.services import CacheService, CleanupService
 
 
 class FakeCategory:
@@ -49,13 +49,3 @@ def test_cleanup_service_orchestrates_without_tkinter():
     assert category.cleaned
     assert result == (1, 0, 3)
 
-
-def test_ui_dispatcher_posts_to_thread_safe_queue(monkeypatch):
-    calls = []
-
-    def callback():
-        pass
-
-    monkeypatch.setattr("limpiapro.services.ui_dispatcher.post_ui", calls.append)
-    assert UiDispatcher().post(callback) is None
-    assert calls == [callback]

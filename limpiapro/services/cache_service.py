@@ -12,6 +12,7 @@ Design Principles:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -108,7 +109,5 @@ class CacheService:
             os.replace(tmp, self.path)
         except OSError:
             # Best-effort cleanup of the temporary file.
-            try:
+            with contextlib.suppress(OSError):
                 tmp.unlink(missing_ok=True)
-            except OSError:
-                pass

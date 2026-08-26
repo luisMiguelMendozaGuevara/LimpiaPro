@@ -41,7 +41,7 @@ if %ERRORLEVEL%==0 (
 )
 
 echo.
-echo Iniciando release_tool.py...
+echo Iniciando upload_release.py...
 echo.
 
 %PYTHON% upload_release.py %*
@@ -63,4 +63,5 @@ if %ERRORLEVEL%==0 (
 )
 
 pause
+
 

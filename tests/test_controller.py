@@ -62,7 +62,7 @@ def test_preview_worker_snapshots(tmp_path):
     worker = PreviewWorker(cats, limit=10)
     worker.done.connect(result.append)
     worker.run()
-    key, files, scanned = result[0][0]
+    key, _files, scanned = result[0][0]
     assert key == "a" and scanned == 2
     # list_files snapshotted the exact target set for the upcoming clean.
     assert cats[0]._snapshot is not None

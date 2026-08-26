@@ -37,7 +37,7 @@ def test_run_system_cmd_decodes_oem_without_mojibake(monkeypatch):
 
     res = run_system_cmd(["schtasks", "/query"])
     assert res.returncode == 0
-    assert "Tareas con acentos: á é í ó ú ñ" == res.stdout
+    assert res.stdout == "Tareas con acentos: á é í ó ú ñ"
     assert calls["kw"]["encoding"] == "cp850"
     assert calls["args"] == ["schtasks", "/query"]
 

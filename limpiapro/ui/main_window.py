@@ -50,8 +50,9 @@ from .. import APP_NAME, APP_VERSION
 from ..i18n import t
 from ..settings import Settings
 from ..utils import _errlog, format_size, is_admin
-from . import icons
+from . import constants, icons
 from . import theme as ui_theme
+from .dialogs import app_info, readonly_toplevel, structured_confirm
 from .pages import (
     CleanPage,
     DuplicatePage,
@@ -60,7 +61,6 @@ from .pages import (
     UninstallPage,
     UpdatePage,
 )
-from .widgets import app_info, readonly_toplevel, structured_confirm
 
 if TYPE_CHECKING:  # imported lazily at runtime; annotations only here
     from ..controller import CleanSummary, LimpiaProController
@@ -232,7 +232,7 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         if self.settings.auto_analyze and not self._auto_analyze_done:
             self._auto_analyze_done = True
-            QTimer.singleShot(250, self.analyze_all)
+            QTimer.singleShot(constants.ANALYZE_DEFER_MS, self.analyze_all)
 
     # -------------------------------------------------------- navigation
 
@@ -372,26 +372,12 @@ class MainWindow(QMainWindow):
 
     def confirm_clean(self) -> None:
         """Show the structured confirmation dialog and clean if approved."""
+        from .messages import clean_confirmation
         selected = self.pages_clean.selected_categories()
         if not selected:
             app_info(self, "info", APP_NAME, t("msg.no_categories"))
             return
-        total = sum(c.size for c in selected)
-        heading = t("msg.clean_confirm_heading", n=len(selected),
-                    size=format_size(total))
-        subtitle = t("msg.clean_confirm_sub")
-        items = [(c.label, format_size(c.size) if c.size else
-                  t("clean.recycle_empty") if c.recycle_bin
-                  else t("clean.is_clean")) for c in selected]
-        notes = [t("msg.clean_note_browsers")]
-        if any(c.recycle_bin for c in selected):
-            notes.append(t("msg.clean_note_recycle"))
-        if any(c.key == "winapp" for c in selected):
-            notes.append(t("msg.clean_note_winapp"))
-        if any(c.needs_admin for c in selected) and not is_admin():
-            notes.append(t("msg.clean_note_admin"))
-        if not structured_confirm(self, "warning", heading, subtitle,
-                                  items, notes,
+        if not structured_confirm(self, "warning", *clean_confirmation(selected),
                                   yes_text=t("btn.clean_yes")):
             return
         self.pages_clean.progress.setValue(0)
@@ -468,7 +454,7 @@ class MainWindow(QMainWindow):
         if msg.startswith("cleaning:"):
             self.set_status(t("log.cleaning_cat", label=msg.split(":", 1)[1]))
         elif msg.startswith("cleaned:"):
-            _kind, label, r, e, f = msg.split(":")
+            _kind, _label, r, e, f = msg.split(":")
             self.log(t("log.cat_cleaned", n=r, e=e, size=format_size(int(f))))
         elif msg.startswith("recycle:"):
             # recycle:{label}:ok | recycle:{label}:<failure message>

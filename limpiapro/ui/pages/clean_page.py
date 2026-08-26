@@ -1,4 +1,4 @@
-"""Page: system cleanup (replica of the legacy clean page).
+"""Page: system cleanup 
 
 Shows one row per cleaning category with a checkbox, the measured size
 and the file count. The bottom bar holds the selected total, the global
@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 from ...i18n import t
 from ...utils import format_size
 from .. import icons
-from ..widgets import FlowLayout
+from ..layouts import FlowLayout
 
 
 class CategoryRow(QWidget):
@@ -158,8 +158,7 @@ class CleanPage(QWidget):
         footer = QHBoxLayout()
         footer.setSpacing(12)
         self.total_lbl = QLabel(t("clean.total_calculating"))
-        self.total_lbl.setStyleSheet(
-            "font-size: 13px; font-weight: 600; background: transparent;")
+        self.total_lbl.setObjectName("totalText")
         footer.addWidget(self.total_lbl)
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)

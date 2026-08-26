@@ -29,6 +29,7 @@ Backend Rule:
     the UI layer translates user-facing text via i18n.t().
 """
 
+import contextlib
 import os
 import re
 import shlex
@@ -104,10 +105,8 @@ def get_installed_apps():
                     est = _get("EstimatedSize")
                     size_kb = 0
                     if est:
-                        try:
+                        with contextlib.suppress(TypeError, ValueError):
                             size_kb = int(est)
-                        except (TypeError, ValueError):
-                            pass
                     entry = {
                         "name": str(display).strip(),
                         "publisher": str(_get("DisplayPublisher") or "").strip(),
@@ -175,10 +174,7 @@ def _registry_target_allowed(sub_path):
         body = body[1:]
         if not body:
             return False
-    for p in body:
-        if p in _BLOCKED_REGISTRY_NAMESPACES:
-            return False
-    return True
+    return all(p not in _BLOCKED_REGISTRY_NAMESPACES for p in body)
 
 
 def delete_registry_path(path):
@@ -245,9 +241,8 @@ def _resolve_exe(token):
         2. %SystemRoot%
         3. PATH environment variable directories
     """
-    for base in (os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
-                              "System32"),
-                 os.path.join(os.environ.get("SystemRoot", r"C:\Windows"))):
+    sysroot = os.environ.get("SYSTEMROOT", r"C:\Windows")
+    for base in (os.path.join(sysroot, "System32"), sysroot):
         cand = os.path.join(base, token)
         if os.path.isfile(cand):
             return cand
@@ -306,7 +301,7 @@ def split_command(cmd):
         if not resolved:
             return None, f"the executable was not found: {exe}"
         exe = resolved
-    return [exe] + tokens[1:], None
+    return [exe, *tokens[1:]], None
 
 
 def launch_uninstaller(command):
@@ -411,10 +406,8 @@ def _app_still_registered(name):
     target = _norm(name)
     if not target:
         return False
-    for app in get_installed_apps():
-        if _norm(app["name"]) == target:
-            return True
-    return False
+    return any(_norm(app["name"]) == target
+               for app in get_installed_apps())
 
 
 def find_leftovers(name, location=""):

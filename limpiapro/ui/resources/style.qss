@@ -1,4 +1,4 @@
-/* LimpiaPro PySide6 replica stylesheet (legacy customtkinter look).
+/* LimpiaPro PySide6 stylesheet.
    Color tokens are substituted at runtime by limpiapro/ui/theme.py:
    %BG% %SIDEBAR% %CARD% %CARD_ALT% %CARD_HOVER% %BORDER% %TEXT% %MUTED%
    %FAINT% %INPUT% %CONSOLE% %SUCCESS% %SUCCESS_TEXT% %WARNING% %ERROR%
@@ -81,6 +81,13 @@ QLabel#mutedText {
 
 QLabel#statusText {
     color: %MUTED%;
+    background: transparent;
+}
+
+QLabel#totalText {
+    font-size: 13px;
+    font-weight: 600;
+    color: %TEXT%;
     background: transparent;
 }
 

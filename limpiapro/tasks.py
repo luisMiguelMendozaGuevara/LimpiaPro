@@ -81,7 +81,7 @@ def set_task_enabled(task_name, enable):
     """Enable/disable a scheduled task. Returns (ok, msg).
 
     Args:
-        task_name: The full path name of the task (e.g., "\Microsoft\Windows\...").
+        task_name: The full path name of the task (e.g., "\\Microsoft\\Windows\\...").
         enable: True to enable, False to disable.
 
     Returns:

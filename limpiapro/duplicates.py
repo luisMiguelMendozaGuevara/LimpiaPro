@@ -220,7 +220,7 @@ class DuplicateScanner:
 
         # One pool reused across all phases and groups.
         with ThreadPoolExecutor(max_workers=self._workers) as pool:
-            for _size, paths in by_size.items():
+            for paths in by_size.values():
                 if self.cancel:
                     break
                 if len(paths) < 2:
@@ -236,7 +236,7 @@ class DuplicateScanner:
                 full = self._hash_paths(cands, self._full_hash, pool)
                 if full is None:
                     break
-                for _h, group in full.items():
+                for group in full.values():
                     if len(group) > 1:
                         self.groups.append(group)
         return self.groups

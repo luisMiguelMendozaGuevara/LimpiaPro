@@ -39,4 +39,5 @@ def test_settings_save_is_atomic(tmp_path):
     Settings(theme="dark").save(path)
     # no leftover temp file after a successful save
     assert not (tmp_path / "settings.json.tmp").exists()
-    assert json.loads(open(path, encoding="utf-8").read())["theme"] == "dark"
+    with open(path, encoding="utf-8") as fh:
+        assert json.loads(fh.read())["theme"] == "dark"

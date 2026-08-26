@@ -81,9 +81,7 @@ class Settings:
             if key not in valid:
                 continue
             # Type-check each field before accepting it.
-            if key in bool_fields and isinstance(value, bool):
-                kwargs[key] = value
-            elif key in str_fields and isinstance(value, str):
+            if (key in bool_fields and isinstance(value, bool)) or (key in str_fields and isinstance(value, str)):
                 kwargs[key] = value
         return cls(**kwargs)
 

@@ -81,7 +81,7 @@ def get_processes():
                 continue
             # Pad the row with empty strings to ensure we can unpack safely.
             # tasklist /v typically returns 9 columns.
-            name, pid, session, snum, mem, status, user, cpu, title = (row + [""] * 9)[:9]
+            name, pid, session, _snum, mem, _status, user, _cpu, title = (row + [""] * 9)[:9]
             procs.append({
                 "name": name.strip(),
                 "pid": pid.strip(),

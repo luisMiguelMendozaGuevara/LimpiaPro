@@ -43,6 +43,7 @@ Security Guarantees:
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import os
 import re
@@ -194,10 +195,8 @@ def _known_folder_path(folder_id: str) -> str | None:
             _KF_FLAG_DONT_VERIFY, None, ctypes.byref(out))
         path = out.value
         if path:
-            try:
+            with contextlib.suppress(Exception):
                 ctypes.windll.ole32.CoTaskMemFree(out)
-            except Exception:
-                pass
         if hr == 0 and path:
             return path
     except Exception:
@@ -376,10 +375,8 @@ class SafetyGuard:
             bool: True if the path is under a protected user folder, False otherwise.
         """
         roots = self.protected_user_roots()
-        for root in roots:
-            if norm == root or norm.startswith(root + os.sep):
-                return True
-        return False
+        return any(norm == root or norm.startswith(root + os.sep)
+                   for root in roots)
 
     def is_safe_delete_target(self, path: str,
                               is_dir: bool | None = None) -> bool:
@@ -425,7 +422,7 @@ class SafetyGuard:
         Example:
             >>> guard = SafetyGuard()
             >>> guard.is_safe_delete_target("C:\\\\Windows\\\\Temp\\\\file.tmp", is_dir=False)
-            True  # Individual file under Windows\Temp is allowed
+            True  # Individual file under Windows\\Temp is allowed
             >>> guard.is_safe_delete_target("C:\\\\Users\\\\John\\\\Documents", is_dir=True)
             False  # Folder under Documents is refused
             >>> guard.is_safe_delete_target("C:\\\\Users\\\\John\\\\Documents\\\\App\\\\logs\\\\cache.tmp", is_dir=False)

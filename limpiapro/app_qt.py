@@ -60,8 +60,8 @@ def _maybe_elevate() -> bool:
             exe, args = sys.executable, subprocess.list2cmdline(sys.argv[1:])
         else:
             exe = sys.executable
-            args = subprocess.list2cmdline([os.path.abspath(sys.argv[0])]
-                                           + sys.argv[1:])
+            args = subprocess.list2cmdline(
+                [os.path.abspath(sys.argv[0]), *sys.argv[1:]])
         _errlog(f"qt: no admin; elevating: {exe} {args}")
         result = ctypes.windll.shell32.ShellExecuteW(
             None, "runas", exe, args, None, 1)
@@ -131,12 +131,14 @@ def main() -> None:
     if screenshot:
         from PySide6.QtCore import QTimer
 
+        from .ui.constants import SCREENSHOT_DEFER_MS
+
         def _grab() -> None:
             window.grab().save(screenshot)
             _errlog(f"qt: screenshot saved to {screenshot}")
             app.quit()
 
-        QTimer.singleShot(2500, _grab)
+        QTimer.singleShot(SCREENSHOT_DEFER_MS, _grab)
         app.exec()
         return
     sys.exit(app.exec())

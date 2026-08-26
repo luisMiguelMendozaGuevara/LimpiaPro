@@ -1,4 +1,4 @@
-"""Page: activity log (replica of the legacy log page).
+"""Page: activity log 
 
 This module implements a simple read-only log viewer for the PySide6
 interface. It displays a timestamped history of all application events

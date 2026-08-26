@@ -6,7 +6,7 @@ wraps the DISM (Deployment Image Servicing and Management) command-line
 tool to analyze and clean the WinSxS component store.
 
 Architecture:
-    - Measures the component store size (C:\Windows\WinSxS).
+    - Measures the component store size (C:\\Windows\\WinSxS).
     - Runs DISM analyze/cleanup commands on a worker thread.
     - DISM output arrives in the operating system language (out of the
       app's control) and is appended verbatim to the console box.
@@ -33,8 +33,8 @@ from PySide6.QtWidgets import (
 from ... import APP_NAME
 from ...i18n import t
 from ...utils import _folder_size, format_size
-from .. import icons
-from ..widgets import run_async
+from .. import constants, icons
+from ..workers import run_async
 
 
 class UpdatePage(QWidget):
@@ -155,9 +155,9 @@ class UpdatePage(QWidget):
         """
         try:
             result = subprocess.run(  # nosec B603 - fixed binary + arg list
-                ["dism", "/online", "/cleanup-image"] + args,
+                ["dism", "/online", "/cleanup-image", *args],
                 capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=1800,
+                errors="replace", timeout=constants.DISM_TIMEOUT_S,
                 creationflags=subprocess.CREATE_NO_WINDOW)
             out = (result.stdout or result.stderr or "").strip()
         except Exception as e:
@@ -176,7 +176,7 @@ class UpdatePage(QWidget):
 
     def clean(self) -> None:
         """Clean the component store after confirmation."""
-        from ..widgets import app_confirm
+        from ..dialogs import app_confirm
         if not app_confirm(self, "warning", APP_NAME,
                            t("msg.update_clean_confirm"),
                            yes_text=t("btn.clean_yes")):

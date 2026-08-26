@@ -21,6 +21,7 @@ Design Principles:
      (like installer finalization) from ever running.
 """
 
+import contextlib
 import os
 import winreg
 
@@ -81,7 +82,7 @@ def _read_reg_entries(hive, subkey):
                     name, value, _ = winreg.EnumValue(key, i)
                     out[name] = value
                     i += 1
-                except OSError:
+                except OSError:  # noqa: PERF203 - end of enumeration must break here
                     # End of enumeration or error.
                     break
     except OSError:
@@ -209,10 +210,8 @@ def _reg_transfer(hive_src, subkey_src, hive_dst, subkey_dst, name, value):
     
     # Step 1: Write to destination, remembering any previous value there.
     with winreg.CreateKey(hive_dst, subkey_dst) as kdst:
-        try:
+        with contextlib.suppress(OSError):
             prev, prev_type = winreg.QueryValueEx(kdst, name)
-        except OSError:
-            pass
         winreg.SetValueEx(kdst, name, 0, winreg.REG_SZ, str(value))
         
     # Step 2: Delete from source.
@@ -226,10 +225,8 @@ def _reg_transfer(hive_src, subkey_src, hive_dst, subkey_dst, name, value):
             if prev is not None:
                 winreg.SetValueEx(kdst, name, 0, prev_type, prev)
             else:
-                try:
+                with contextlib.suppress(OSError):
                     winreg.DeleteValue(kdst, name)
-                except OSError:
-                    pass
         raise
 
 

@@ -1,4 +1,4 @@
-"""Page: uninstaller (replica of the legacy uninstall page).
+"""Page: uninstaller 
 
 This module implements the application uninstaller UI for PySide6. It
 replicates the behavior of the legacy CustomTkinter uninstall page while
@@ -37,15 +37,9 @@ from ...uninstall import (
 )
 from ...utils import _delete_path, format_size
 from .. import icons
-from ..widgets import (
-    app_confirm,
-    app_info,
-    fill_tree,
-    make_tree,
-    readonly_toplevel,
-    run_async,
-    selected_one,
-)
+from ..dialogs import app_confirm, app_info, readonly_toplevel
+from ..tree_helpers import fill_tree, make_tree, selected_one
+from ..workers import run_async
 
 
 class UninstallPage(QWidget):

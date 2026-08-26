@@ -66,7 +66,7 @@ def test_disabled_startup_filters_entries_still_active(monkeypatch):
     monkeypatch.setattr(
         startup,
         "_read_reg_entries",
-        lambda hive, key: {"App": "C:\\app.exe"} if "Disabled" in key else {"App": "C:\\app.exe"},
+        lambda _hive, _key: {"App": "C:\\app.exe"},
     )
     monkeypatch.setattr(startup.os.path, "isdir", lambda _path: False)
 

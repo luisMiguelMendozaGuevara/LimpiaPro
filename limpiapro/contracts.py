@@ -110,27 +110,13 @@ class CleanCategoryProtocol(Protocol):
         ...
 
 
-class UiDispatcherProtocol(Protocol):
-    """Protocol for a UI thread dispatcher.
-
-    Implementations: UiDispatcher (services/ui_dispatcher.py)
-    """
-    def post(self, callback: Callable[[], Any]) -> None:
-        """Enqueue a callback to be executed on the UI thread.
-
-        Args:
-            callback: A zero-argument callable.
-        """
-        ...
-
-
 class CleanerAppProtocol(Protocol):
     """Minimal host surface used by pages, not the whole application object.
 
     This Protocol defines the interface that pages expect from their
     host application (the "app" object passed to their __init__).
 
-    Implementations: CleanerApp (app.py), MainWindow (ui/main_window.py)
+    Implementations: MainWindow (ui/main_window.py)
     """
 
     # Attributes

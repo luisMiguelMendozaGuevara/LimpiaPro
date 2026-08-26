@@ -10,7 +10,7 @@ target-version = "py310"
 exclude = ["build", "dist", "_backup_20260814_173918"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "C4"]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF", "PERF"]
 ignore = ["E501"]
 
 [tool.pyright]

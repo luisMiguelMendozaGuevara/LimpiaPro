@@ -19,6 +19,7 @@ Architecture Overview:
       of targets, ensuring clean() deletes exactly what the preview showed.
 """
 
+import contextlib
 import os
 import threading
 
@@ -107,8 +108,7 @@ def browser_cache_folders(base):
             p = os.path.join(base, entry)
             if not os.path.isdir(p):
                 continue
-            for cf in cache_folders:
-                result.append(os.path.join(p, cf))
+            result.extend(os.path.join(p, cf) for cf in cache_folders)
     except OSError:
         pass
     return result
@@ -183,9 +183,8 @@ class CleanCategory:
         """
         out = []
         for loc in self.locations:
-            for h in glob_like(os.path.expandvars(loc)):
-                if os.path.exists(h):
-                    out.append(h)
+            out.extend(h for h in glob_like(os.path.expandvars(loc))
+                       if os.path.exists(h))
         return out
 
     @staticmethod
@@ -207,10 +206,7 @@ class CleanCategory:
         """
         if not patterns_re:
             return True
-        for rx in patterns_re:
-            if rx.match(name):
-                return True
-        return False
+        return any(rx.match(name) for rx in patterns_re)
 
     def _rule_roots(self):
         """Yield (rule, existing_root) pairs for each winapp2 rule.
@@ -325,20 +321,16 @@ class CleanCategory:
                 if (self._match_re(os.path.basename(root),
                                    rule.patterns_re)
                         and not rule.is_excluded(root)):
-                    try:
+                    with contextlib.suppress(OSError):
                         self.size += os.path.getsize(root)
-                    except OSError:
-                        pass
                     self.files += 1
                 continue
             for entry in _iter_tree_files(root, should_cancel,
                                           recurse=rule.recurse):
                 if (self._match_re(entry.name, rule.patterns_re)
                         and not rule.is_excluded(entry.path)):
-                    try:
+                    with contextlib.suppress(OSError):
                         self.size += entry.stat().st_size
-                    except OSError:
-                        pass
                     self.files += 1
                     if on_progress and self.files % PROGRESS_RULES == 0:
                         on_progress(self.files)
@@ -386,10 +378,8 @@ class CleanCategory:
                     self.files += files
                 else:
                     self.files += 1
-                    try:
+                    with contextlib.suppress(OSError):
                         self.size += os.path.getsize(loc)
-                    except OSError:
-                        pass
             size = self.size
         
         audit.log_operation(
@@ -638,8 +628,10 @@ def build_categories():
         if os.path.isdir(base):
             browser_locations.append(os.path.join(base, "Cache"))
             browser_locations.append(os.path.join(base, "GPUCache"))
-    for profile in glob_like(os.path.expandvars(os.path.join(d["firefox"], "*"))):
-        browser_locations.append(os.path.join(profile, "cache2"))
+    browser_locations.extend(
+        os.path.join(profile, "cache2")
+        for profile in glob_like(os.path.expandvars(
+            os.path.join(d["firefox"], "*"))))
     cat_browser = CleanCategory(
         "browser", t("cat.browser.label"), t("cat.browser.desc"),
         browser_locations, "\U0001F310")
