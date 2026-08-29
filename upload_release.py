@@ -109,7 +109,7 @@ def _api_request(
 
 
 def _release_notes() -> str:
-    notes = PROJECT_ROOT / f"RELEASE_NOTES_v{APP_VERSION}.md"
+    notes = PROJECT_ROOT / "docs" / "releases" / f"RELEASE_NOTES_v{APP_VERSION}.md"
     if notes.exists():
         return notes.read_text(encoding="utf-8")
     return f"{APP_NAME} {TAG_NAME}\n\nAutomated Windows release."
