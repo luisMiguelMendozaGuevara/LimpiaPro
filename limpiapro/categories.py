@@ -457,7 +457,7 @@ class CleanCategory:
         return targets, list(dict.fromkeys(remove_roots))
 
     def clean(self, on_file=None, on_progress=None, target_bytes=0,
-              should_cancel=None):
+              should_cancel=None, to_recycle: bool = False):
         """Delete every target of the category in parallel.
         
         Targets are collected in one pass and deleted through _parallel_map
@@ -478,6 +478,10 @@ class CleanCategory:
                                           for progress calculation. Defaults to 0.
             should_cancel (callable, optional): Zero-argument function that
                                                 returns True to stop deletion.
+            to_recycle (bool, optional): Move targets to the recycle bin
+                                                instead of deleting them
+                                                (recoverable cleanup).
+                                                Defaults to False.
                                                 
         Returns:
             tuple[int, int, int]: (removed_count, error_count, freed_bytes)
@@ -504,7 +508,7 @@ class CleanCategory:
         def _delete_one(target):
             if should_cancel and should_cancel():
                 return
-            ok, size, errors = _delete_measured(target)
+            ok, size, errors = _delete_measured(target, to_recycle=to_recycle)
             
             # Audit log: record each deletion attempt (P1-16)
             if ok:

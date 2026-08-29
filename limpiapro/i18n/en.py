@@ -33,6 +33,7 @@ STRINGS = {
     "status.parsing_winapp": "Parsing winapp2 rules...",
     "status.analysis_done": "Analysis complete",
     "status.analyze_cancelled": "Analysis cancelled",
+    "status.cached": "Cached results from {age} ago - use Analyze to refresh",
     "log.analyze_cancelled": "Analysis cancelled by the user.",
     "status.cleaning": "Cleaning...",
     "status.clean_done": "Cleanup finished - {size} freed",
@@ -71,6 +72,9 @@ STRINGS = {
                                 "apps before cleaning to avoid errors."),
     "msg.clean_note_recycle": ("Attention: the recycle bin will be "
                                "emptied permanently."),
+    "msg.clean_note_to_recycle": ("Recycle-bin mode: items are moved to "
+                                  "the recycle bin (space is freed when "
+                                  "the bin is emptied)."),
     "msg.clean_note_admin": ("Notice: running without administrator "
                              "rights; some system categories will be "
                              "skipped."),
@@ -155,6 +159,7 @@ STRINGS = {
     "settings.group_behaviors": "Behavior",
     "settings.auto_analyze": "Analyze automatically on start",
     "settings.confirm_clean": "Confirm before cleaning",
+    "settings.recycle_bin": "Move to the recycle bin instead of deleting",
     "settings.group_paths": "Locations",
     "settings.cache": "Cache",
     "settings.logs": "Logs",

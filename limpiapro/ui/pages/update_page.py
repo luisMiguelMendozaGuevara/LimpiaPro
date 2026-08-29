@@ -154,7 +154,9 @@ class UpdatePage(QWidget):
             application, so there is no injection risk.
         """
         try:
-            result = subprocess.run(  # nosec B603 - fixed binary + arg list
+            # dism is a fixed System32 binary reached through PATH (hence
+            # B607); arguments are a literal list, never a shell string.
+            result = subprocess.run(  # nosec B603, B607
                 ["dism", "/online", "/cleanup-image", *args],
                 capture_output=True, text=True, encoding="utf-8",
                 errors="replace", timeout=constants.DISM_TIMEOUT_S,

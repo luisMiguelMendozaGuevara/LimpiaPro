@@ -281,11 +281,16 @@ class DuplicatePage(QWidget):
                 except OSError:
                     changed += 1
                     continue
-            if _delete_path(p):
+            if _delete_path(p, to_recycle=self._recycle_enabled()):
                 removed += 1
             else:
                 errors += 1
         return removed, errors, changed
+
+    def _recycle_enabled(self) -> bool:
+        """True when the user opted for recycle-bin instead of delete."""
+        return bool(getattr(self.host.settings,
+                            "delete_to_recycle_bin", False))
 
     def _delete_done(self, removed, errors, changed) -> None:
         """Handle deletion completion."""
@@ -297,8 +302,12 @@ class DuplicatePage(QWidget):
         # Remove the deleted items from the tree.
         for i in range(self.tree.topLevelItemCount() - 1, -1, -1):
             parent = self.tree.topLevelItem(i)
+            if parent is None:
+                continue
             for j in range(parent.childCount() - 1, -1, -1):
                 child = parent.child(j)
+                if child is None:
+                    continue
                 p = item_data(child)
                 if isinstance(p, str) and not os.path.exists(p):
                     parent.removeChild(child)

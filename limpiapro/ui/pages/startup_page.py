@@ -175,7 +175,7 @@ class StartupPage(QWidget):
             icon = None
             if exe and os.path.exists(exe):
                 icon = _ICON_PROVIDER.icon(QFileInfo(exe))
-            kw = {"index": i}
+            kw: dict[str, object] = {"index": i}
             if icon is not None:
                 kw["icon"] = icon
             specs.append((e["name"], (e["source"], e["command"]), kw))
@@ -432,10 +432,9 @@ class StartupPage(QWidget):
             self,
             [
                 ("#0", t("col.process"), 260),
-                ("pid", "PID", 70, "center"),
-                ("session", t("col.session"), 80, "center"),
-                ("mem", t("col.memory"), 90, "e"),
-                ("user", t("col.user"), 160),
+                ("pid", "PID", 90, "center"),
+                ("session", t("col.session"), 100, "center"),
+                ("mem", t("col.memory"), 110, "e"),
             ],
         )
         lay.addWidget(self.proc_tree, 1)
@@ -465,8 +464,10 @@ class StartupPage(QWidget):
             if search and search not in p["name"].lower():
                 continue
             count += 1
+            # NOTE: no "user" column anymore - tasklist runs without /v
+            # (several seconds faster, cannot hang on a hung process).
             specs.append((p["name"],
-                          (p["pid"], p["session"], p["mem"], p["user"]),
+                          (p["pid"], p["session"], p["mem"]),
                           {"index": i}))
         fill_tree(self.proc_tree, specs)
         self.host.log(t("log.processes_shown", n=count))

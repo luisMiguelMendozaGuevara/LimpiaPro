@@ -19,6 +19,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+# How long a cached scan is considered fresh enough to skip the startup
+# auto-analysis. Full rescans stay one click away (the Analyze button),
+# and preview/clean always re-walk the filesystem, so a fresh-but-stale
+# size only affects the numbers shown right after launch.
+DEFAULT_FRESH_SECONDS = 6 * 3600
+
 
 class CacheService:
     """Load and atomically persist category scan results.
@@ -66,17 +72,62 @@ class CacheService:
         except (OSError, ValueError, TypeError):
             # File missing, permission denied, or malformed JSON.
             return {}
-        
+
         if not isinstance(raw, dict):
             return {}
-        
-        # CRITICAL: Version gating. Prevents loading old cache formats 
+
+        # CRITICAL: Version gating. Prevents loading old cache formats
         # after an app upgrade or schema change.
         if raw.get("schema") != self.schema or raw.get("app_version") != self.app_version:
             return {}
-            
+
         data = raw.get("data")
         return data if isinstance(data, dict) else {}
+
+    def age_seconds(self, now: float | None = None) -> float | None:
+        """Age of the cache in seconds, or None when unknown.
+
+        Uses the cache file's mtime, which is the moment the last
+        successful save swapped the file into place. Works for caches
+        written by any schema/version (no payload parsing needed).
+
+        Args:
+            now: Reference timestamp (defaults to time.time()).
+
+        Returns:
+            float | None: Age in seconds; None when the file does not
+                          exist or cannot be stat'ed.
+        """
+        try:
+            mtime = self.path.stat().st_mtime
+        except OSError:
+            return None
+        reference = time.time() if now is None else now
+        return max(reference - mtime, 0.0)
+
+    def is_fresh(
+        self, max_age_seconds: float = DEFAULT_FRESH_SECONDS, now: float | None = None
+    ) -> bool:
+        """True when a cache file exists and is younger than the limit.
+
+        Used by the startup flow to decide between showing cached sizes
+        (instant, incremental behavior) and running the full auto-
+        analysis. Any error reading the file counts as not fresh.
+
+        Strictly younger (age < limit), not <=: age_seconds() clamps to
+        a floor of 0.0 (Windows can round a freshly written file's mtime
+        into the future), so with a 0-second window a brand-new cache
+        must count as NOT fresh, not as just-barely-fresh.
+
+        Args:
+            max_age_seconds: Freshness window (DEFAULT_FRESH_SECONDS).
+            now: Reference timestamp (defaults to time.time()).
+
+        Returns:
+            bool: True when the cache can stand in for a fresh analysis.
+        """
+        age = self.age_seconds(now=now)
+        return age is not None and age < max_age_seconds
 
     def save(self, data: dict[str, dict[str, int]], platform_name: str) -> None:
         """Persist data atomically to disk.

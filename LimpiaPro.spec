@@ -35,7 +35,10 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX OFF: compressed exes are a well-known antivirus false-positive
+    # trigger (unsigned app + UPX = heuristic quarantine). The size win
+    # does not pay for the AV friction; checksums cover integrity.
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,

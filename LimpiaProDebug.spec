@@ -35,7 +35,8 @@ exe = EXE(
     debug=True,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX OFF: see LimpiaPro.spec (AV false positives).
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=True,

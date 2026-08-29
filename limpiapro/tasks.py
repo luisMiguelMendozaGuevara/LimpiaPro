@@ -57,12 +57,14 @@ def get_scheduled_tasks():
                 continue
                 
             name = (row[_NAME] or "").strip()
-            # Skip junk rows:
+            # Skip junk rows (language-independent):
             # - Empty names
-            # - Names not starting with '\' (task paths always do)
-            # - Rows containing 'tarea' (Spanish for 'task', often a 
-            #   repeated header in localized output)
-            if not name or not name.startswith("\\") or "tarea" in name.lower():
+            # - Names not starting with '\' (task paths always do; repeated
+            #   localized header rows never do, whatever the UI language)
+            # NOTE: do NOT filter by localized words ("tarea", "Tâche", ...):
+            # that used to hide legitimate tasks whose path contains them
+            # (e.g. "\MiTareaDiaria\Ejecutar" on a Spanish Windows).
+            if not name or not name.startswith("\\"):
                 continue
                 
             tasks.append({

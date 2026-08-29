@@ -109,8 +109,8 @@ def get_system_accent() -> str:
         if ok == 0:
             # Extract RGB from the DWORD (0xAABBGGRR).
             return f"#{color.value & 0x00FFFFFF:06x}"
-    except Exception:
-        pass
+    except Exception:  # nosec B110 - accent probe is cosmetic best-effort;
+        pass           # ACCENT_FALLBACK below already covers any failure
     return ACCENT_FALLBACK
 
 

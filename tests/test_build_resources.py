@@ -22,6 +22,17 @@ def test_every_spec_bundles_the_stylesheet_and_data():
                 f"{spec_name} is missing data file {source} -> {dest}"
 
 
+def test_no_spec_enables_upx():
+    """UPX must stay OFF in every spec: packed exes are a well-known
+    antivirus false-positive trigger for an unsigned app, which costs
+    more users than the size saving buys."""
+    for spec_name in SPECS:
+        text = (ROOT / spec_name).read_text(encoding="utf-8")
+        assert "upx=True" not in text, \
+            f"{spec_name} re-enabled UPX (AV false-positive regression)"
+        assert "upx=False" in text, f"{spec_name} does not pin upx=False"
+
+
 def test_stylesheet_has_no_unsubstituted_tokens():
     from limpiapro.ui.theme import build_stylesheet
     rendered = build_stylesheet(accent="#0067c0", dark=True)

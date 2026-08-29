@@ -154,7 +154,10 @@ class CleanWorker(QObject):
     share of the pre-clean total. Results are not re-scanned afterwards:
     CleanCategory.clean() already updated the category sizes with the
     freed bytes, so get_results() is accurate without a new analysis
-    (Fase 6/7)."""
+    (Fase 6/7).
+
+    When to_recycle is True every target is moved to the recycle bin
+    instead of being deleted permanently (user opt-in from settings)."""
 
     progress = Signal(float)
     log = Signal(str)
@@ -162,10 +165,12 @@ class CleanWorker(QObject):
     cancelled = Signal()
 
     def __init__(self, categories: Iterable, should_cancel: Callable[[], bool],
+                 to_recycle: bool = False,
                  parent: QObject | None = None):
         super().__init__(parent)
         self._categories = list(categories)
         self._should_cancel = should_cancel
+        self._to_recycle = to_recycle
 
     def run(self) -> None:
         selected = self._categories
@@ -195,6 +200,7 @@ class CleanWorker(QObject):
                 cat.list_files()
             r, e, f = cat.clean(
                 target_bytes=cat.size,
+                to_recycle=self._to_recycle,
                 on_progress=(lambda frac, cum=cumulative, tot=target_all:
                              self.progress.emit(
                                  cum / tot + frac * (tot - cum) / tot)
@@ -327,11 +333,18 @@ class LimpiaProController(QObject):
         worker.failed.connect(self._release_busy)
         self._start_worker(worker, worker.done, worker.failed)
 
-    def clean(self, keys: Iterable[str]) -> None:
+    def clean(self, keys: Iterable[str],
+              to_recycle: bool = False) -> None:
         """Delete the selected categories on a worker thread.
 
         Every path still passes through SafetyGuard inside the core right
-        before deletion; this controller never decides safety."""
+        before deletion; this controller never decides safety.
+
+        Args:
+            keys: The category keys to clean.
+            to_recycle: Move targets to the recycle bin instead of
+                        deleting them (user opt-in from settings).
+        """
         if self._busy:
             return
         selected = [c for c in self.categories if c.key in set(keys)]
@@ -341,7 +354,8 @@ class LimpiaProController(QObject):
         self._cancel_requested = False
         self._set_busy(True)
         self.clean_started.emit()
-        worker = CleanWorker(selected, self._should_cancel)
+        worker = CleanWorker(selected, self._should_cancel,
+                             to_recycle=to_recycle)
         worker.progress.connect(self.clean_progress)
         worker.log.connect(self.clean_log)
         worker.finished.connect(self.clean_finished)

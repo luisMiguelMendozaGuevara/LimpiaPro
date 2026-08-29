@@ -86,8 +86,8 @@ class CleanupService:
         for category in categories:
             if should_cancel and should_cancel():
                 break
-                
-            # Build the progress callback with a closure to capture the 
+
+            # Build the progress callback with a closure to capture the
             # current category reference.
             result = category.clean(
                 target_bytes=category.size,

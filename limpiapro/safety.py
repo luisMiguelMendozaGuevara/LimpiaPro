@@ -199,8 +199,8 @@ def _known_folder_path(folder_id: str) -> str | None:
                 ctypes.windll.ole32.CoTaskMemFree(out)
         if hr == 0 and path:
             return path
-    except Exception:
-        pass
+    except Exception:  # nosec B110 - best-effort API probe; None falls back
+        pass          # to %USERPROFILE%\\<Name> roots which stay protected
     return None
 
 

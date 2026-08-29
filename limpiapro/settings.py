@@ -38,12 +38,19 @@ class Settings:
         auto_analyze (bool): Whether to automatically run a scan on startup.
         confirm_before_clean (bool): Whether to show a confirmation dialog
                                      before deleting files.
+        delete_to_recycle_bin (bool): When True, cleanup moves targets to
+                                     the recycle bin instead of deleting
+                                     them permanently (recoverable, but
+                                     disk space is not freed until the
+                                     bin is emptied). Default False
+                                     (legacy permanent-delete behavior).
     """
 
     theme: str = "dark"                 # dark | light | system
     language: str = "auto"              # auto | es | en
     auto_analyze: bool = True           # run a scan shortly after start
     confirm_before_clean: bool = True   # confirmation dialog before delete
+    delete_to_recycle_bin: bool = False # recycle instead of permanent delete
 
     @classmethod
     def load(cls, path: str | os.PathLike[str] | None = None) -> Settings:
@@ -73,7 +80,8 @@ class Settings:
         
         # Whitelist valid field names to prevent injection of arbitrary attributes.
         valid = {f.name for f in fields(cls)}
-        bool_fields = {"auto_analyze", "confirm_before_clean"}
+        bool_fields = {"auto_analyze", "confirm_before_clean",
+                       "delete_to_recycle_bin"}
         str_fields = {"theme", "language"}
         
         kwargs: dict = {}

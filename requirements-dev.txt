@@ -1,5 +1,9 @@
-pytest>=8.0
-pyinstaller>=6.22
-ruff>=0.8
-pyright>=1.1.380
-bandit>=1.7
+# Development / CI tooling — pinned EXACT versions so lint results stay
+# reproducible: newer ruff/pyright releases silently add rules that turn
+# a green pipeline red without any code change.
+# Last audit: 2026-08-27 (ruff+bandit+pyright runs verified on this pin set).
+pytest==9.1.1
+pyinstaller==6.22.2
+ruff==0.16.4
+pyright==1.1.411
+bandit==1.9.4

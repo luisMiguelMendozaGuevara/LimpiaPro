@@ -1,1 +1,9 @@
-PySide6>=6.6
+# Runtime dependencies — pinned EXACT versions (reproducible builds).
+# This app ships compiled via PyInstaller; unpinned floats would let an
+# untested upstream release change shipped binaries. Bump deliberately,
+# running the full suite + CI after each bump.
+# Last audit: 2026-08-28 (PySide6 6.11.2 verified against the test suite).
+PySide6==6.11.2
+# Recycle-bin backend for the optional "move instead of delete" cleanup
+# mode (recycle_path / _delete_measured(to_recycle=True)).
+send2trash==2.1.0

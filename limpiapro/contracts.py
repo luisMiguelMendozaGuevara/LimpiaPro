@@ -24,6 +24,7 @@ class CacheStore(Protocol):
 
     Implementations: CacheService (services/cache_service.py)
     """
+
     def load(self) -> dict[str, Any]:
         """Load cached data from storage."""
         ...
@@ -46,6 +47,7 @@ class CleanCategoryProtocol(Protocol):
 
     Implementations: CleanCategory (categories.py)
     """
+
     # Attributes
     key: str
     label: str

@@ -257,12 +257,17 @@ class UninstallPage(QWidget):
         err = 0
         for kind, p in self.leftovers:
             deleted = delete_registry_path(p) if kind == "registry" \
-                else _delete_path(p)
+                else _delete_path(p, to_recycle=self._recycle_enabled())
             if deleted:
                 ok += 1
             else:
                 err += 1
         return ok, err
+
+    def _recycle_enabled(self) -> bool:
+        """True when the user opted for recycle-bin instead of delete."""
+        return bool(getattr(self.host.settings,
+                            "delete_to_recycle_bin", False))
 
     def _delete_leftovers_done(self, ok, err) -> None:
         self.host.set_busy(False)

@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege: the workflows only need to read the source. Explicitly
+# requesting the minimum cuts the blast radius of a compromised action
+# (GitHub falls back to the repository-wide default token policy otherwise).
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: windows-latest
@@ -97,9 +103,20 @@ jobs:
         run: |
           dist\LimpiaPro.exe --smoke-test
 
+      - name: Generate SHA256 checksums
+        shell: pwsh
+        run: |
+          $exe = "dist/LimpiaPro.exe"
+          $hash = (Get-FileHash -Algorithm SHA256 $exe).Hash
+          "$hash  LimpiaPro.exe" | Out-File -Encoding ascii "$exe.sha256"
+          Write-Host "SHA256: $hash"
+          Get-Content "$exe.sha256"
+
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
           name: LimpiaPro-${{ github.sha }}
-          path: dist/LimpiaPro.exe
+          path: |
+            dist/LimpiaPro.exe
+            dist/LimpiaPro.exe.sha256
           retention-days: 7

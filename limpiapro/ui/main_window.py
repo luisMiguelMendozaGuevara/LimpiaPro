@@ -49,7 +49,7 @@ from PySide6.QtWidgets import (
 from .. import APP_NAME, APP_VERSION
 from ..i18n import t
 from ..settings import Settings
-from ..utils import _errlog, format_size, is_admin
+from ..utils import _errlog, format_size, humanize_duration, is_admin
 from . import constants, icons
 from . import theme as ui_theme
 from .dialogs import app_info, readonly_toplevel, structured_confirm
@@ -64,6 +64,7 @@ from .pages import (
 
 if TYPE_CHECKING:  # imported lazily at runtime; annotations only here
     from ..controller import CleanSummary, LimpiaProController
+
 
 # Navigation configuration: (page_key, i18n_key)
 _NAV = [
@@ -232,7 +233,27 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         if self.settings.auto_analyze and not self._auto_analyze_done:
             self._auto_analyze_done = True
-            QTimer.singleShot(constants.ANALYZE_DEFER_MS, self.analyze_all)
+            QTimer.singleShot(constants.ANALYZE_DEFER_MS,
+                              self._auto_analyze_startup)
+
+    def _auto_analyze_startup(self) -> None:
+        """Incremental startup analysis (perf: skip redundant full scan).
+
+        When the on-disk cache is still fresh, the cached sizes stand in
+        for the scan: the UI paints the same numbers instantly and no
+        disk walk happens at all. Stale or missing cache keeps the old
+        behavior (full analysis). A manual Analyze always rescans."""
+        if self.busy:
+            return
+        cache = self.controller.cache_service
+        if cache.is_fresh():
+            self._apply_cache()
+            self.pages_clean.update_total()
+            age = cache.age_seconds() or 0.0
+            self.set_status(t("status.cached",
+                              age=humanize_duration(age)))
+            return
+        self.analyze_all()
 
     # -------------------------------------------------------- navigation
 
@@ -281,7 +302,9 @@ class MainWindow(QMainWindow):
     @property
     def pages_clean(self) -> CleanPage:
         """The CleanPage instance."""
-        return self._get_page("clean")
+        page = self._get_page("clean")
+        assert isinstance(page, CleanPage), "page registry changed: 'clean'"
+        return page
 
     @property
     def categories(self):
@@ -291,12 +314,16 @@ class MainWindow(QMainWindow):
     @property
     def pages_dupes(self) -> DuplicatePage:
         """The DuplicatePage instance."""
-        return self._get_page("dupes")
+        page = self._get_page("dupes")
+        assert isinstance(page, DuplicatePage), "page registry changed: 'dupes'"
+        return page
 
     @property
     def log_page(self) -> LogPage:
         """The LogPage instance."""
-        return self._get_page("log")
+        page = self._get_page("log")
+        assert isinstance(page, LogPage), "page registry changed: 'log'"
+        return page
 
     # -------------------------------------------------- host API (pages)
 
@@ -377,12 +404,22 @@ class MainWindow(QMainWindow):
         if not selected:
             app_info(self, "info", APP_NAME, t("msg.no_categories"))
             return
-        if not structured_confirm(self, "warning", *clean_confirmation(selected),
+        to_recycle = bool(getattr(self.settings, "delete_to_recycle_bin",
+                                  False))
+        if not structured_confirm(self, "warning",
+                                  *clean_confirmation(selected,
+                                                      to_recycle=to_recycle),
                                   yes_text=t("btn.clean_yes")):
             return
         self.pages_clean.progress.setValue(0)
         self.set_status(t("status.cleaning"))
-        self.controller.clean([c.key for c in selected])
+        self.controller.clean([c.key for c in selected],
+                              to_recycle=to_recycle)
+
+    def _on_recycle_toggled(self, on: bool) -> None:
+        """Persist the recycle-bin-instead-of-delete preference."""
+        self.settings.delete_to_recycle_bin = bool(on)
+        self.settings.save()
 
     def preview_clean(self) -> None:
         """Collect preview file lists for selected categories."""
