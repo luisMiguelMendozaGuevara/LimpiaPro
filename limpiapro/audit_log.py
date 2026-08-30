@@ -38,6 +38,7 @@ Architecture Notes:
     - Singleton pattern: A single `audit` instance is used throughout the app.
 """
 
+import contextlib
 import json
 import threading
 import time
@@ -60,6 +61,13 @@ Result = Literal["success", "failed", "skipped"]
 _AUDIT_MAX_BYTES = 5 * 1024 * 1024   # rotate audit.jsonl at 5 MB
 _AUDIT_BACKUPS = 2                    # kept generations: audit.jsonl.1 / .2
 
+# Lote D6 — write batching: bulk operations (a category clean deletes
+# thousands of files) used to pay one open/append/close PLUS one rotation
+# check per record. While a batched() context is active, records are held
+# in memory and flushed with ONE write every _BATCH_FLUSH_EVERY records.
+# Crash trade-off: at most the last _BATCH_FLUSH_EVERY records are lost.
+_BATCH_FLUSH_EVERY = 64
+
 
 class AuditLogger:
     """Structured audit logger for operations.
@@ -76,15 +84,20 @@ class AuditLogger:
           generations, so worst case footprint stays ~15 MB.
         - appends are serialized with an internal lock: several QThread
           workers can log concurrently without interleaving half-lines.
-    
+        - Lote D6: bulk operations can wrap themselves in batched() so the
+          per-record open/append/close cost collapses into periodic single
+          writes (one every _BATCH_FLUSH_EVERY records plus one at exit).
+
     Attributes:
         _log_path (Path | None): Cached path to the audit log file.
+        _batch_depth (int): Nesting depth of active batched() contexts.
+        _batch_buffer (list[str]): Records buffered by the active batch.
     """
-    
+
     def __init__(self, max_bytes: int = _AUDIT_MAX_BYTES,
                  backups: int = _AUDIT_BACKUPS):
         """Initialize the AuditLogger with lazy path resolution.
-        
+
         Args:
             max_bytes (int): Size threshold that triggers rotation.
                 Defaults to _AUDIT_MAX_BYTES; tests may lower it.
@@ -95,6 +108,9 @@ class AuditLogger:
         self._lock = threading.Lock()
         self._max_bytes = max(1, int(max_bytes))
         self._backups = max(1, int(backups))
+        # Lote D6: write batching state (guarded by _lock).
+        self._batch_depth = 0
+        self._batch_buffer: list[str] = []
     
     @property
     def log_path(self) -> Path:
@@ -167,6 +183,10 @@ class AuditLogger:
             - Rotation: bounded growth via _rotate_log_file under the same
               lock that guards the append, so rotate+append are atomic
               with respect to other writers.
+            - Batching (Lote D6): while a batched() context is active the
+              record goes to an in-memory buffer flushed every
+              _BATCH_FLUSH_EVERY records (and at context exit) instead of
+              paying one open/append/close per record.
         """
         # Redact before serializing: json.dumps escapes backslashes, so a
         # plaintext mask over the final line would never match C:\Users\...
@@ -187,16 +207,82 @@ class AuditLogger:
         }
         if details:
             record["details"] = details
-        
+
         line = json.dumps(record, ensure_ascii=False)
         try:
             with self._lock:
+                if self._batch_depth > 0:
+                    # Lote D6: buffered write — one flush every N records.
+                    self._batch_buffer.append(line + "\n")
+                    if len(self._batch_buffer) >= _BATCH_FLUSH_EVERY:
+                        self._flush_locked()
+                    return
                 _rotate_log_file(str(self.log_path), self._max_bytes,
                                  self._backups)
                 with open(self.log_path, "a", encoding="utf-8") as f:
                     f.write(line + "\n")
         except Exception:  # nosec B110 - audit logging must not break operations
             # Audit logging must never fail the main operation
+            pass
+
+    @contextlib.contextmanager
+    def batched(self):
+        r"""Buffer audit records during a bulk operation (Lote D6).
+
+        While the context is active, every log_operation() call from ANY
+        thread appends to an in-memory buffer instead of reopening the
+        file; the buffer is flushed in one write every _BATCH_FLUSH_EVERY
+        records and again on context exit (also on exception — finally).
+
+        This removes the per-record open/append/close + rotation-check
+        overhead that made a thousands-file clean pay one syscall pair
+        per deleted file (audit I/O amplification finding, 2nd audit).
+
+        Crash trade-off: if the process dies mid-batch, at most the last
+        _BATCH_FLUSH_EVERY records are lost. Use flush() for a durable
+        checkpoint without leaving the batch.
+
+        Yields:
+            None
+
+        Example:
+            >>> with audit.batched():          # doctest: +SKIP
+            ...     for target in targets:
+            ...         audit.log_operation(operation="cleanup", path=target)
+        """
+        with self._lock:
+            self._batch_depth += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._batch_depth -= 1
+                if self._batch_depth == 0:
+                    self._flush_locked()
+
+    def flush(self) -> None:
+        """Force-write buffered records (Lote D6).
+
+        A durability checkpoint for batched() users: buffered lines are
+        written to disk immediately without leaving the batch. No-op when
+        nothing is buffered (the common case outside batched()).
+        """
+        with self._lock:
+            self._flush_locked()
+
+    def _flush_locked(self) -> None:
+        """Write and clear the batch buffer. The lock MUST be held."""
+        if not self._batch_buffer:
+            return
+        lines = self._batch_buffer
+        self._batch_buffer = []
+        try:
+            _rotate_log_file(str(self.log_path), self._max_bytes,
+                             self._backups)
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write("".join(lines))
+        except Exception:  # nosec B110 - audit logging must not break operations
+            # Losing audit lines must never fail the main operation.
             pass
     
     def analyze_errors(self) -> dict:

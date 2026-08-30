@@ -27,7 +27,6 @@ from .audit_log import audit
 from .i18n import t
 from .utils import (
     PROGRESS_DELETE,
-    PROGRESS_RULES,
     DeleteError,
     _delete_measured,
     _fast_folder_stats,
@@ -292,48 +291,73 @@ class CleanCategory:
 
     def _scan_rules(self, on_progress=None, should_cancel=None):
         """Scan winapp2-rule targets: measure each matched file/folder.
-        
-        Each category is scanned on its own thread; roots are walked serially
-        inside it (extra parallelism gains nothing on a regular disk). File
-        sizes come from the DirEntry stat of the shared traversal, so no
-        extra stat syscall is paid per file.
-        
+
+        Categories are scanned one at a time by the controller worker;
+        the ROOTS inside each category are walked in parallel through
+        _parallel_map (Lote D7) — multi-root categories (browser caches,
+        winapp2 FileKeys) overlap their directory traversal, and the
+        per-root results are summed deterministically in rule order.
+        File sizes come from the DirEntry stat of the shared traversal,
+        so no extra stat syscall is paid per file.
+
         Args:
-            on_progress (callable, optional): Function called with file count
-                                              every PROGRESS_RULES files.
+            on_progress (callable, optional): Function called with the
+                                              running file count after each
+                                              root completes.
             should_cancel (callable, optional): Zero-argument function that
                                                 returns True to stop scanning.
-                                                
+                                                Checked by every root worker
+                                                and between entries.
+
         Returns:
             int: Total size in bytes of all matched targets.
-            
+
         Notes:
-            - Progress reporting: Every PROGRESS_RULES files (default: 100).
-            - Cooperative cancellation: Checks should_cancel() between roots.
-            - Error handling: OSError on individual files is silently ignored.
+            - Parallel roots (D7): each (rule, root) pair is scanned in a
+              pool worker; workers never touch shared state, they return
+              (size, files) pairs that the caller accumulates.
+            - Cancellation: workers return partial counts early; results
+              from cancelled workers are still summed (caller discards).
+            - Error handling: a crashed worker yields None from
+              _parallel_map and contributes nothing; OSError on individual
+              files is silently ignored inside the worker.
         """
         self.size = 0
         self.files = 0
-        for rule, root in self._rule_roots():
+        pairs = list(self._rule_roots())
+
+        def _scan_one_root(pair):
+            rule, root = pair
+            root_size = 0
+            root_files = 0
             if should_cancel and should_cancel():
-                break
+                return root_size, root_files
             if os.path.isfile(root):
                 if (self._match_re(os.path.basename(root),
                                    rule.patterns_re)
                         and not rule.is_excluded(root)):
                     with contextlib.suppress(OSError):
-                        self.size += os.path.getsize(root)
-                    self.files += 1
-                continue
+                        root_size += os.path.getsize(root)
+                    root_files += 1
+                return root_size, root_files
             for entry in _iter_tree_files(root, should_cancel,
                                           recurse=rule.recurse):
                 if (self._match_re(entry.name, rule.patterns_re)
                         and not rule.is_excluded(entry.path)):
                     with contextlib.suppress(OSError):
-                        self.size += entry.stat().st_size
-                    self.files += 1
-                    if on_progress and self.files % PROGRESS_RULES == 0:
-                        on_progress(self.files)
+                        root_size += entry.stat().st_size
+                    root_files += 1
+            return root_size, root_files
+
+        results = _parallel_map(_scan_one_root, pairs)
+        for res in results:
+            if res is None:  # crashed worker: contributes nothing
+                continue
+            size_part, files_part = res
+            self.size += size_part
+            self.files += files_part
+            if on_progress:
+                on_progress(self.files)
         return self.size
 
     def scan(self, on_progress=None, should_cancel=None):
@@ -367,19 +391,34 @@ class CleanCategory:
         if self.rules:
             size = self._scan_rules(on_progress, should_cancel)
         else:
+            # Lote D7: locations are measured in parallel (per-location
+            # workers return (size, files); progress is reported from this
+            # thread after each location completes, never from workers).
             self.size = 0
             self.files = 0
-            for loc in self._locations_existing():
+            locs = self._locations_existing()
+
+            def _scan_one_location(loc):
                 if should_cancel and should_cancel():
-                    break
+                    return 0, 0
                 if os.path.isdir(loc):
-                    size, files = _fast_folder_stats(loc, on_progress, should_cancel)
-                    self.size += size
-                    self.files += files
-                else:
-                    self.files += 1
-                    with contextlib.suppress(OSError):
-                        self.size += os.path.getsize(loc)
+                    # No on_progress here: callbacks would run on pool
+                    # threads; the caller reports progress per location.
+                    return _fast_folder_stats(loc, None, should_cancel)
+                loc_size = 0
+                with contextlib.suppress(OSError):
+                    loc_size = os.path.getsize(loc)
+                return loc_size, 1
+
+            results = _parallel_map(_scan_one_location, locs)
+            for res in results:
+                if res is None:  # crashed worker: contributes nothing
+                    continue
+                size_part, files_part = res
+                self.size += size_part
+                self.files += files_part
+                if on_progress:
+                    on_progress(self.files)
             size = self.size
         
         audit.log_operation(
@@ -491,7 +530,8 @@ class CleanCategory:
             - Progress reporting: Chunked (every PROGRESS_DELETE files) to avoid
               flooding the UI with updates.
             - Audit logging: Records each deletion attempt with success/failure
-              details (P1-16).
+              details (P1-16). Records are written in batches (Lote D6) and
+              the operation closes with a per-category "summary" record.
             - REMOVESELF: After deletion, attempts to remove roots marked with
               REMOVESELF if they're empty. Respects safety layer.
             - Error handling: Collects DeleteError objects for detailed reporting.
@@ -547,26 +587,39 @@ class CleanCategory:
             if on_progress and target_bytes > 0 and done % PROGRESS_DELETE == 0:
                 on_progress(min(freed / target_bytes, 1.0))
 
-        _parallel_map(_delete_one, targets)
+        # Lote D6: per-file audit records are batched (one write every
+        # _BATCH_FLUSH_EVERY records instead of one open/append/close per
+        # file) and the operation closes with a per-category summary.
+        with audit.batched():
+            _parallel_map(_delete_one, targets)
 
-        # REMOVESELF: remove the rule folder itself when left empty. The
-        # safety layer still applies: a rule must not remove a protected
-        # root even if it asks for REMOVESELF.
-        for root in remove_roots:
-            if not is_safe_delete_target(root):
-                error_detail.append(DeleteError(
-                    path=root, operation="rmdir", kind="safety",
-                    message="REMOVESELF refused by delete safety policy"))
-                state["errors"] += 1
-                continue
-            try:
-                os.rmdir(root)
-            except OSError:
-                state["errors"] += 1
+            # REMOVESELF: remove the rule folder itself when left empty.
+            # The safety layer still applies: a rule must not remove a
+            # protected root even if it asks for REMOVESELF.
+            for root in remove_roots:
+                if not is_safe_delete_target(root):
+                    error_detail.append(DeleteError(
+                        path=root, operation="rmdir", kind="safety",
+                        message="REMOVESELF refused by delete safety policy"))
+                    state["errors"] += 1
+                    continue
+                try:
+                    os.rmdir(root)
+                except OSError:
+                    state["errors"] += 1
 
-        removed = state["removed"]
-        errors = state["errors"]
-        freed = state["freed"]
+            removed = state["removed"]
+            errors = state["errors"]
+            freed = state["freed"]
+            audit.log_operation(
+                operation="cleanup",
+                category=self.key,
+                action="summary",
+                result="success",
+                details={"removed": removed, "errors": errors,
+                         "freed_bytes": freed,
+                         "mode": "recycle" if to_recycle else "delete"})
+
         self.size = max(0, self.size - freed)
         self.files = removed
         self.errors = errors

@@ -15,16 +15,21 @@ jobs:
   lint:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned by full commit SHA (Lote D1): a mutable tag
+      # (@v4) lets a compromised upstream repo run code in CI. Bump =
+      # update SHA + version comment together.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
       - name: Install linting tools
+        # Single source of truth (S7): floating `pip install ruff pyright
+        # bandit` already broke the Bandit gate once (1.7 -> 1.9 jump).
         run: |
           python -m pip install --upgrade pip
-          pip install ruff pyright bandit
+          pip install -r requirements-dev.txt
 
       - name: Run Ruff (linter)
         run: ruff check limpiapro/ tests/
@@ -40,7 +45,7 @@ jobs:
 
       - name: Upload Bandit report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bandit-report
           path: bandit-report.json
@@ -49,9 +54,12 @@ jobs:
     runs-on: windows-latest
     needs: lint
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned by full commit SHA (Lote D1): a mutable tag
+      # (@v4) lets a compromised upstream repo run code in CI. Bump =
+      # update SHA + version comment together.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -65,7 +73,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-results
           path: |
@@ -76,9 +84,12 @@ jobs:
     runs-on: windows-latest
     needs: test
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned by full commit SHA (Lote D1): a mutable tag
+      # (@v4) lets a compromised upstream repo run code in CI. Bump =
+      # update SHA + version comment together.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -113,7 +124,7 @@ jobs:
           Get-Content "$exe.sha256"
 
       - name: Upload executable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: LimpiaPro-${{ github.sha }}
           path: |

@@ -5,6 +5,59 @@ Todos los cambios notables de este proyecto se documentarán en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/),
 y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
+## [Unreleased]
+
+### Added
+
+#### Lote D1: CI endurecido + lint determinista
+- **9 acciones de GitHub pineadas por SHA completo** (`.github/workflows/ci.yml`):
+  `checkout`, `setup-python`, `upload-artifact` referenciadas por commit de 40 hex
+- **Lint determinista**: `pip install -r requirements-dev.txt` (S7 pins exactos)
+  en vez de `pip install ruff pyright bandit` flotante
+
+#### Lote D2: Crash-safety del worker de limpieza
+- `CleanWorker.run` envuelto en try/except: emite `failed` + `operation_error`
+  y suelta `_release_busy` ante cualquier excepción no prevista (antes dejaba
+  la UI bloqueada para siempre)
+
+#### Lote D3: Caché post-limpieza persistida
+- `LimpiaProController._save_results_cache()`: tras cada limpieza se
+  persisten los tamaños actualizados para que el siguiente arranque (<6 h)
+  muestre las cifras correctas y no las pre-limpieza
+
+#### Lote D4: Trazabilidad del log de errores
+- `_ERRLOG_LOCK` a nivel de módulo: serializa rotación + append del
+  `limpiapro_error.log` entre workers concurrentes (evita entrelazado y
+  pérdida de líneas)
+
+#### Lote D5: Deny-list de archivos críticos del SO
+- **Basenames críticos rechazados** en cualquier ubicación (p. ej. `ntoskrnl.exe`,
+  `hal.dll`, `kernel32.dll`, `lsass.exe`, etc.)
+- **Descendientes de `System32/SysWOW64/Boot` rechazados** (ficheros y carpetas)
+- **Whitelist operativa**: `LogFiles`, `spool\PRINTERS`, `winevt\Logs` sí limpiables
+- Ficheros sueltos de `C:\Windows` protegidos (Temp/Prefetch/SoftwareDistribution
+  siguen limpiables), `%SystemRoot%` respetado, integración con
+  `_delete_measured(kind="safety")`
+
+#### Lote D6: Auditoría con batching de escrituras
+- `AuditLogger.batched()`: buffer en memoria, flush cada 64 registros y
+  al salir del contexto (incluso en excepción via finally); JSONL válido
+- `categories.clean()`, `duplicates.delete_duplicates()`,
+  `uninstall.delete_leftover_items()` usan batching y emiten `summary`
+  (removed/errors/freed_bytes/modo) + fallos por fichero solo en error
+
+#### Lote D7: Escaneo paralelo de raíces
+- `_parallel_map` recorre rules y locations de categorías multi-raíz en
+  paralelo (cachés de navegador 6 perfiles x 13 subcarpetas, winapp2 decenas
+  de FileKeys); progreso determinista por raíz, cancelación cooperativa,
+  tolerancia a worker crash (`None` ignorado)
+
+### Fixed
+
+- `delete_registry_path` (restos de desinstalador) ahora registra el
+  motivo del fallo en `limpiapro_error.log` (antes se tragaba la excepción)
+- Test `test_redact_needs_boundary` aislado de `USERPROFILE`/`HOME` reales
+
 ## [2.6] - 2026-08-29
 
 ### Added
@@ -26,6 +79,27 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   del desinstalador (las otras dos vías de borrado permanente)
 - Nueva dependencia pinned: `send2trash==2.1.0` (backend estándar de
   papelera, Python puro, MIT)
+
+#### Lote D6: cobertura de auditoría completa + batching de escrituras
+- **`AuditLogger.batched()`**: las operaciones masivas ya no pagan un
+  open/append/close + comprobación de rotación POR REGISTRO; los
+  registros se bufferizan en memoria y se vuelcan en una sola escritura
+  cada 64 registros y al salir del contexto (también en excepción, via
+  finally). Peaje documentado: si el proceso muere a mitad de lote se
+  pierden como máximo los últimos 64 registros de auditoría
+- **`duplicates.delete_duplicates()`**: nuevo servicio core que traslada
+  la validación de snapshot + borrado de la página de duplicados al
+  núcleo y registra la operación en `audit.jsonl` (antes NO se auditaba
+  nada): registros por fichero SOLO de fallos + un registro `summary`
+  con removed/errors/changed/freed_bytes/modo
+- **`uninstall.delete_leftover_items()`**: ídem para los restos del
+  desinstalador (claves de registro y ficheros), con registros de fallo
+  y `summary` (operation="uninstall", category="leftovers")
+- `categories.clean()` cierra ahora con un registro `summary` por
+  categoría (removed/errors/freed_bytes/modo) y agrupa sus registros
+  por fichero en un batch
+- Las páginas de UI quedan finas: `duplicates_page._delete_worker` y
+  `uninstall_page._delete_leftovers_worker` delegan en los servicios core
 
 ### Performance
 
@@ -62,7 +136,52 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   (`LimpiaPro.exe.sha256` via `Get-FileHash`) y lo publica junto al
   artefacto para verificación de integridad sin descargar dos veces
 
+#### Escaneo paralelo de raíces (Lote D7)
+- `CleanCategory._scan_rules()` y el escaneo de locations de `scan()`
+  recorrían sus raíces EN SERIE: las categorías multi-raíz (cachés de
+  navegador con 6 perfiles x 13 subcarpetas, winapp2 con decenas de
+  FileKeys) pagaban la latencia SUMA de todos los árboles
+- Ahora cada raíz/localización se recorre en un worker de
+  `_parallel_map` (el mismo pool ya usado para el borrado); los workers
+  no tocan estado compartido: devuelven pares (size, files) que se
+  suman determinísticamente en orden de regla
+- El progreso se reporta desde el hilo llamador tras completar cada
+  raíz (los callbacks desde workers del pool no son thread-safe); la
+  cancelación cooperativa se comprueba en cada worker y entre entradas
+- Tolerante a fallos: un worker que reviente contribuye None y se
+  ignora (el resto de raíces se cuentan); docstring mentiroso de
+  `_scan_rules` ("scanned on its own thread") corregido
+- `_iter_targets()` (preview/snapshot) sigue en serie a propósito: el
+  orden estable del snapshot y del diálogo de preview se preserva
+
 ### Fixed
+
+#### Lote D: robustez de limpieza, caché post-limpieza y trazabilidad (D2/D3/D4)
+- **Un fallo inesperado durante la limpieza dejaba la UI bloqueada**
+  (`controller.py`)
+  - `CleanWorker.run` era el único worker sin red de excepciones ni señal
+    `failed`: cualquier excepción no prevista en `cat.clean()` mataba el
+    hilo sin disparar `thread.quit()` — todos los botones quedaban
+    deshabilitados para siempre tras una operación destructiva
+  - Ahora `run()` envuelve el cuerpo en try/except y emite `failed`,
+    cableado a `operation_error` + `_release_busy` y como señal terminal
+    del hilo (mismo contrato que Analysis/Preview/Task workers)
+- **La caché mostraba tamaños pre-limpieza como "resultados en cache"**
+  (`controller.py`)
+  - Tras un clean nadie re-escribía la caché: al reabrir en <6 h el
+    análisis incremental presentaba las cifras ANTES de limpiar
+  - `LimpiaProController._save_results_cache()` persiste los tamaños
+    post-limpieza (CleanCategory.clean ya los actualiza en memoria);
+    helper `_cache_payload()` compartido con AnalysisWorker y constante
+    `PLATFORM_NAME` (sustituye el magic value `"win32"`)
+- **`delete_registry_path` fallaba en silencio total** (`uninstall.py`)
+  - Única operación destructiva 100% opaca: se tragaba todas las
+    excepciones y devolvía False sin rastro; ahora registra el motivo en
+    `limpiapro_error.log` vía `_errlog`
+- **`_errlog` sin serialización entre hilos** (`utils.py`)
+  - Rotación + append competían entre workers concurrentes (entrelazado
+    o pérdida de líneas justo cuando el log de errores más importa);
+    lock a nivel de módulo alrededor de la sección crítica (D4)
 
 #### Bugs de seguridad y corrección (P0, verificados)
 - **Listado de tareas programadas ocultaba tareas legítimas** (`tasks.py`)
@@ -143,6 +262,38 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
   contenedor): 162 passed (+25), mismo conjunto FAILED/ERROR
   preexistente del entorno ⇒ cero regresiones
 
+#### Lote D (D1-D4): 9 tests nuevos
+- `tests/test_lote_d.py` (7): señal `failed` de CleanWorker sin
+  `finished`, crash libera busy y reporta `operation_error`, resumen de
+  éxito intacto, caché post-limpieza con tamaños actualizados, forma del
+  payload de caché, `_errlog` con 8 hilos × 25 líneas íntegras y
+  `delete_registry_path` registrando el motivo del fallo
+- `tests/test_security_hardening.py` (+2): todas las acciones del CI
+  pineadas por SHA completo de 40 hex y herramientas de lint instaladas
+  desde `requirements-dev.txt` (nada flotante)
+- Suite Linux tras Lote D: 171 passed (+9), conjunto FAILED/ERROR
+  byte-idéntico al baseline ⇒ cero regresiones
+
+#### Lote D5-D7: 26 tests nuevos (tests/test_lote_d5_d7.py)
+- D5: basenames críticos rechazados en cualquier ubicación,
+  descendientes de System32/SysWOW64/Boot rechazados (ficheros y
+  carpetas), whitelist LogFiles/spool PRINTERS/winevt Logs operativa,
+  ficheros sueltos de C:\Windows protegidos con Temp/Prefetch/
+  SoftwareDistribution limpiables, robustez ante mayúsculas/separadores,
+  %SystemRoot% respetado, integración con `_delete_measured`
+  (kind="safety") y política histórica intacta
+- D6: batching (buffer hasta salir, auto-flush al umbral de 64, flush
+  en excepción, JSONL válido, escritura inmediata fuera de batch),
+  summary de `categories.clean` (modo delete/recycle),
+  `delete_duplicates` con snapshot-revalidación y sin registros de
+  éxito por fichero, fallos de duplicados con error_code/kind,
+  `delete_leftover_items` con fallo de registro y summary
+- D7: `_parallel_map` usado para rules y locations, progreso por
+  raíz/localización determinista, tolerancia a worker crash (None) en
+  ambos caminos, cancelación cooperativa
+- Suite Linux tras Lote D5-D7: 197 passed (+26), conjunto FAILED/ERROR
+  byte-idéntico al baseline ⇒ cero regresiones
+
 ### Security
 
 #### Higiene de logs (privacidad + límite de tamaño)
@@ -167,6 +318,48 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - **GITHUB_TOKEN restringido** (`.github/workflows/ci.yml`)
   - `permissions: contents: read` explícito a nivel de workflow; antes se
     heredaba la política por-defecto del repositorio
+
+#### Acciones de CI pineadas por SHA + lint determinista (Lote D1)
+- **9 referencias `uses:` sin pin** (`.github/workflows/ci.yml`)
+  - checkout/setup-python/upload-artifact se referenciaban por tag
+    mutable (`@v4`/`@v5`): un compromiso del repositorio upstream
+    ejecutaría código en CI con acceso al código y artefactos
+  - Pineadas por SHA completo del commit de la versión (v4.2.2 / v5.6.0 /
+    v4.6.2) con la versión como comentario; guarda de test impide
+    regresiones
+- **Herramientas de lint flotantes** (job lint)
+  - `pip install ruff pyright bandit` contradecía la política S7 y ya
+    rompió el gate de Bandit una vez (salto 1.7→1.9); ahora instala
+    `requirements-dev.txt`, única fuente de verdad de versiones
+
+#### Lote D5: deny-list de archivos críticos en SafetyGuard
+- **Vulnerabilidad S2 cerrada**: la política de "ficheros sueltos"
+  permitía borrar binarios del SO (System32, SysWOW64, Boot, hijos
+  directos de C:\Windows) si un winapp2.ini cargable por el usuario lo
+  pedía; las reglas de winapp2 son ahora entrada NO CONFIADA para la
+  puerta de borrado
+- **Deny-list por basename GLOBAL** (~60 entradas): las DLLs núcleo de
+  Win32 (ntdll/kernel32/user32/gdi32/...), componentes de kernel y
+  arranque (ntoskrnl, hal, win32k, bootmgr, bootmgfw.efi, winload.*),
+  procesos vitales (smss/csrss/wininit/winlogon/services/lsass/svchost/
+  explorer/dwm), cmd/powershell/regedit/taskmgr, pagefile/swapfile/
+  hiberfil y las colmenas de registro por usuario (ntuser.dat,
+  usrclass.dat) se rechazan EN CUALQUIER ubicación: una copia de
+  kernel32.dll en %TEMP% es sospechosa, no limpiable
+- **Árboles binarios del SO protegidos en profundidad**: todo
+  descendiente (fichero o carpeta) de System32, SysWOW64 y Boot se
+  rechaza, con whitelist explícita SOLO para ficheros en subárboles
+  limpiables de verdad (LogFiles, spool\PRINTERS, winevt\Logs); los
+  ficheros sueltos directamente bajo C:\Windows también se protegen
+- `%SystemRoot%`/`%WINDIR%` resueltos en runtime: instalaciones de
+  Windows en unidades distintas de C: quedan cubiertas; comparaciones
+  en forma canónica (backslash + minúsculas) para ser inmune a
+  mayúsculas y separadores mezclados en reglas hostiles
+- Comprobación también sobre el realpath: un junction que resuelva
+  dentro de un árbol crítico se rechaza igual que uno que resuelva en
+  una carpeta de usuario protegida
+- Coste: comprobaciones de cadena puras (sin syscalls) por objetivo de
+  borrado; el escaneo no pasa por la deny-list
 
 ### Changed
 

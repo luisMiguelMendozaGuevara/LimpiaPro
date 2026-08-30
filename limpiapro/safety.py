@@ -24,6 +24,15 @@ Policy Overview:
       is refused even when the literal path looks harmless. Walks in
       categories.py / utils.iter_file_sizes never descend into junctions.
 
+    * **Critical-file deny-list (Lote D5)** — winapp2.ini is user-loadable,
+      so its rules are untrusted input for this gate. OS-critical files
+      (kernel32.dll, explorer.exe, boot components, page files, registry
+      hives, ...) are refused BY BASENAME everywhere, and the OS binary
+      trees (System32, SysWOW64, Boot) refuse every descendant target:
+      no hostile or buggy rule can prune inside the operating system.
+      Explicitly cleanable sub-trees (LogFiles, spool PRINTERS,
+      winevt Logs) stay whitelisted for *file* targets only.
+
 Architecture Notes:
     - The old flat helper `is_safe_delete_target(path)` in utils.py remains as
       a thin wrapper (tests and categories import it from there); the policy
@@ -108,6 +117,70 @@ _KF_FLAG_DONT_VERIFY = 0x00004000
 # Prevents unbounded memory growth in long-running sessions while still
 # providing cache hits for the thousands of files sharing the same parent.
 _PARENT_CACHE_CAP = 4096
+
+# --- Lote D5: critical-file deny-list ---------------------------------
+# A winapp2.ini is user-loadable, so its rules are untrusted input for
+# the deletion policy. These basenames are refused EVERYWHERE: no
+# legitimate cleaning scenario deletes them, and a copy of e.g.
+# kernel32.dll sitting in %TEMP% is suspicious rather than cleanable.
+_CRITICAL_FILE_NAMES = frozenset({
+    # Core NT / Win32 libraries
+    "ntdll.dll", "kernel32.dll", "kernelbase.dll", "user32.dll",
+    "gdi32.dll", "gdi32full.dll", "shell32.dll", "advapi32.dll",
+    "ole32.dll", "oleaut32.dll", "rpcrt4.dll", "ucrtbase.dll",
+    "msvcrt.dll", "combase.dll", "comctl32.dll", "shlwapi.dll",
+    "sechost.dll", "win32u.dll", "ws2_32.dll", "wininet.dll",
+    "winhttp.dll", "crypt32.dll", "msi.dll", "version.dll",
+    # Kernel / boot components
+    "ntoskrnl.exe", "ntkrnlpa.exe", "hal.dll", "win32k.sys",
+    "ci.dll", "bootmgr", "bootmgr.efi", "bootmgfw.efi",
+    "winload.exe", "winload.efi", "winresume.exe", "winresume.efi",
+    # Core system processes
+    "smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe",
+    "services.exe", "lsass.exe", "svchost.exe", "explorer.exe",
+    "dwm.exe", "conhost.exe", "cmd.exe", "powershell.exe",
+    "regedit.exe", "taskmgr.exe",
+    # Memory / page files and per-user registry hives
+    "pagefile.sys", "swapfile.sys", "hiberfil.sys",
+    "ntuser.dat", "usrclass.dat",
+})
+
+# OS binary trees: every descendant target (file OR folder) is refused —
+# a rule must never prune inside the operating system itself. The system
+# root is also resolved from %SystemRoot%/%WINDIR% so non-C: installs of
+# Windows are covered too.
+_CRITICAL_TREE_DIRS = (
+    r"C:\Windows\System32",
+    r"C:\Windows\SysWOW64",
+    r"C:\Windows\Boot",
+)
+
+# Explicitly cleanable sub-trees INSIDE a critical tree (relative prefix,
+# backslash-separated, lowercased). Only *file* targets are exempt; the
+# folders themselves are never removable.
+_TREE_FILE_EXEMPT_PREFIXES = (
+    "logfiles\\",          # IIS/HTTP and component log files
+    "spool\\printers\\",    # printer spool jobs
+    "winevt\\logs\\",      # event log files
+)
+
+
+def _canon(path: str) -> str:
+    """Windows-style canonical form for deny-list comparisons.
+
+    Backslash separators + lowercased: robust against separator style and
+    letter case on every host OS (os.path.normcase is a no-op on POSIX,
+    so the deny-list would otherwise miss case variants there).
+    String-only: no syscalls, safe to call per deletion target.
+
+    Args:
+        path (str): Path to canonicalize (may contain %ENV% variables).
+
+    Returns:
+        str: Canonical lowercased backslash-separated form of `path`.
+    """
+    return os.path.normcase(os.path.normpath(
+        os.path.expandvars(path))).lower().replace("/", "\\")
 
 
 class _GUID(ctypes.Structure):
@@ -232,6 +305,9 @@ class SafetyGuard:
         self._user_roots: frozenset[str] | None = None
         # parent dir (normcased) -> True when its chain has no junction.
         self._parent_clean: dict[str, bool] = {}
+        # Lote D5: canonical critical trees + windows dir (lazy).
+        self._critical_trees: frozenset[str] | None = None
+        self._windows_dir: str | None = None
 
     # ------------------------------------------------------------- roots
 
@@ -245,6 +321,8 @@ class SafetyGuard:
         self._exact_roots = None
         self._user_roots = None
         self._parent_clean.clear()
+        self._critical_trees = None
+        self._windows_dir = None
 
     def exact_roots(self) -> frozenset[str]:
         """Get system dirs + environment roots: refused as exact targets.
@@ -292,6 +370,121 @@ class SafetyGuard:
                         os.path.normpath(os.path.join(profile, name))))
             self._user_roots = frozenset(roots)
         return self._user_roots
+
+    # ------------------------------------------------- critical deny-list
+
+    def _critical_tree_roots(self) -> frozenset[str]:
+        """Get canonical OS binary trees (hardcoded + SystemRoot-derived).
+
+        Also resolves the Windows directory (cached in ``self._windows_dir``)
+        from %SystemRoot%/%WINDIR% when available, so non-C: installs stay
+        protected. Computed lazily once and cached until invalidate().
+
+        Returns:
+            frozenset[str]: Canonical (backslash, lowercased) tree prefixes.
+        """
+        if self._critical_trees is None:
+            trees = {_canon(d) for d in _CRITICAL_TREE_DIRS}
+            # Windows env var names keep their documented casing (ruff's
+            # SIM112 upper-casing would break Linux/test lookups where the
+            # exact name matters).
+            sysroot = (os.environ.get("SystemRoot")  # noqa: SIM112 - Windows name
+                       or os.environ.get("WINDIR"))
+            if sysroot:
+                base = _canon(sysroot)
+                self._windows_dir = base
+                trees.update(base + "\\" + leaf for leaf in
+                             ("system32", "syswow64", "boot"))
+            else:
+                self._windows_dir = _canon(r"C:\Windows")
+            self._critical_trees = frozenset(trees)
+        return self._critical_trees
+
+    @staticmethod
+    def _deny_parts(norm: str) -> tuple[str, str]:
+        """Split a normalized path into (parent, basename) canonically.
+
+        Both separators are unified to backslash before splitting, so the
+        deny-list matches Windows-style and POSIX-style strings alike.
+
+        Args:
+            norm (str): Already-normalized path (from _norm()).
+
+        Returns:
+            tuple[str, str]: (parent, basename) - parent is "" for bare names.
+        """
+        canon = _canon(norm)
+        if "\\" in canon:
+            parent, _, name = canon.rpartition("\\")
+            return parent, name
+        return "", canon
+
+    def _under_critical_tree(self, norm: str, is_dir: bool) -> bool:
+        """Check whether `norm` falls inside an OS binary tree.
+
+        Files inside explicitly cleanable sub-trees (LogFiles,
+        spool PRINTERS, winevt Logs) are exempt; folder targets are
+        never exempt - the folders themselves must survive.
+
+        Args:
+            norm (str): Normalized path to check.
+            is_dir (bool): True for folder targets (no exemptions apply).
+
+        Returns:
+            bool: True when the target is inside a critical tree.
+        """
+        canon = _canon(norm)
+        for tree in self._critical_tree_roots():
+            if canon.startswith(tree + "\\"):
+                rel = canon[len(tree) + 1:]
+                exempt = (not is_dir
+                          and rel.startswith(_TREE_FILE_EXEMPT_PREFIXES))
+                return not exempt
+        return False
+
+    def _is_critical_file_target(self, norm: str) -> bool:
+        """Lote D5 gate for FILE targets (string checks only, no syscalls).
+
+        Refuses: deny-listed basenames anywhere, loose files directly
+        under the Windows directory, and files inside the OS binary
+        trees (except the whitelisted cleanable sub-trees).
+
+        Args:
+            norm (str): Normalized path (from _norm()).
+
+        Returns:
+            bool: True when this file must never be deleted.
+        """
+        parent, name = self._deny_parts(norm)
+        if name in _CRITICAL_FILE_NAMES:
+            return True
+        self._critical_tree_roots()  # ensures self._windows_dir is set
+        if parent and parent == self._windows_dir:
+            # Loose files directly under C:\Windows are OS-owned
+            # (explorer.exe, win.ini, ...): never cleaning targets.
+            return True
+        return self._under_critical_tree(norm, is_dir=False)
+
+    def _is_critical_folder_target(self, norm: str) -> bool:
+        """Lote D5 gate for FOLDER targets.
+
+        Same refusal rules as files but without sub-tree exemptions:
+        a folder inside System32/SysWOW64/Boot is never removable, and
+        neither is a folder directly under the Windows directory.
+
+        Args:
+            norm (str): Normalized path (from _norm()).
+
+        Returns:
+            bool: True when this folder must never be deleted.
+        """
+        parent, name = self._deny_parts(norm)
+        if name in _CRITICAL_FILE_NAMES:
+            return True
+        self._critical_tree_roots()
+        if parent and parent == self._windows_dir:
+            return True
+        return self._under_critical_tree(norm, is_dir=True)
 
     # ------------------------------------------------------------ policy
 
@@ -408,12 +601,18 @@ class SafetyGuard:
             2. Exact matches of system directories (C:\\Windows, Program Files)
                and environment roots (USERPROFILE, APPDATA) are refused.
             3. For file targets (is_dir=False):
-               - Files anywhere (including under protected folders) are allowed
-                 IF the parent chain has no junctions.
-               - Files reached *through* a junction into a protected area are
-                 refused (literal path looks harmless but resolves inside the
-                 protected folder).
+               - Lote D5: OS-critical files (deny-listed basenames, loose
+                 files directly under the Windows directory, files inside
+                 System32/SysWOW64/Boot) are refused; cleanable sub-trees
+                 (LogFiles, spool PRINTERS, winevt Logs) stay whitelisted.
+               - Files anywhere else (including under protected folders) are
+                 allowed IF the parent chain has no junctions.
+               - Files reached *through* a junction into a protected area or
+                 an OS binary tree are refused (realpath check).
             4. For folder targets (is_dir=True):
+               - Lote D5: any folder inside System32/SysWOW64/Boot or
+                 directly under the Windows directory is refused
+                 (no exemptions).
                - The folder itself or any folder under a protected user folder
                  is refused (prevents recursive deletion of Documents, etc.).
                - Folders reached through a junction into a protected area are
@@ -439,6 +638,10 @@ class SafetyGuard:
             except OSError:
                 is_dir = True  # conservative: unknown targets are folders
         if not is_dir:
+            # Lote D5: OS-critical files are refused before anything else
+            # (deny-list basenames, loose Windows-dir children, binary trees).
+            if self._is_critical_file_target(norm):
+                return False
             # Single file: direct paths anywhere (including under
             # protected folders) are the cleanup itself. Only a file
             # reached *through* a junction into a protected area is
@@ -447,11 +650,20 @@ class SafetyGuard:
             if self._parent_chain_is_clean(norm):
                 return True
             real = self._norm(os.path.realpath(os.path.expandvars(path)))
+            # D5: a junction may resolve into an OS binary tree — the
+            # resolved path gets the same deny-list treatment.
+            if self._is_critical_file_target(real):
+                return False
             return real == norm or not self._under_protected(real)
-        # Folder target: refuse the folder itself or any folder under a
-        # protected user folder, also when reached through a junction.
+        # Folder target: refuse OS-critical trees first (D5), then the
+        # folder itself or any folder under a protected user folder,
+        # also when reached through a junction.
+        if self._is_critical_folder_target(norm):
+            return False
         real = self._norm(os.path.realpath(os.path.expandvars(path)))
         if self.is_drive_root(real) or real in self.exact_roots():
+            return False
+        if self._is_critical_folder_target(real):
             return False
         return not (self._under_protected(norm)
                     or self._under_protected(real))

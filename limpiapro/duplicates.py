@@ -40,7 +40,84 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import BLOCK_SIZE
-from .utils import iter_file_sizes
+from .audit_log import audit
+from .utils import _delete_measured, iter_file_sizes
+
+
+def delete_duplicates(paths, snapshot, to_recycle: bool = False):
+    """Delete user-selected duplicate files with audit logging (Lote D6).
+
+    Core service behind the duplicates page: re-validates every path
+    against the scan snapshot (size + mtime_ns), deletes the still-valid
+    ones through the central safety gate (_delete_measured) and records
+    the operation in the structured audit log — per-file records ONLY for
+    failures, plus one "summary" record with the batch totals (success
+    paths are intentionally not logged per-file: that was the audit-log
+    I/O amplification pattern).
+
+    Args:
+        paths (list[str]): Absolute paths selected for deletion.
+        snapshot (dict[str, tuple[int, int]]): Mapping path ->
+            (size, mtime_ns) captured during the scan. Files whose current
+            stat differs are skipped (changed) to protect user data.
+        to_recycle (bool, optional): Move to the recycle bin instead of
+            deleting. Defaults to False.
+
+    Returns:
+        tuple[int, int, int]: (removed, errors, changed)
+
+    Notes:
+        - Snapshot safety: a file modified (or replaced) after the scan is
+          never destroyed; it is counted in `changed`.
+        - Audit: operation="duplicates"; failures carry error_code/
+          error_msg/kind per file; the summary record carries removed,
+          errors, changed, freed_bytes and the mode (delete/recycle).
+        - Error resilience: audit failures never break the deletion.
+    """
+    removed = 0
+    errors = 0
+    changed = 0
+    freed = 0
+    with audit.batched():
+        for p in paths:
+            if not os.path.exists(p):
+                continue
+            snap = snapshot.get(p)
+            if snap is not None:
+                try:
+                    st = os.stat(p)
+                    if (st.st_size, st.st_mtime_ns) != snap:
+                        changed += 1
+                        continue
+                except OSError:
+                    changed += 1
+                    continue
+            ok, size, del_errors = _delete_measured(p, to_recycle=to_recycle)
+            if ok:
+                removed += 1
+                freed += size
+            else:
+                errors += 1
+                for err in del_errors:
+                    audit.log_operation(
+                        operation="duplicates",
+                        category="duplicates",
+                        action="delete",
+                        path=err.path,
+                        result="failed",
+                        error_code=err.code,
+                        error_msg=err.message,
+                        details={"operation": err.operation,
+                                 "kind": err.kind})
+        audit.log_operation(
+            operation="duplicates",
+            category="duplicates",
+            action="summary",
+            result="success",
+            details={"removed": removed, "errors": errors,
+                     "changed": changed, "freed_bytes": freed,
+                     "mode": "recycle" if to_recycle else "delete"})
+    return removed, errors, changed
 
 
 class DuplicateScanner:

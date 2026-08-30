@@ -30,12 +30,12 @@ from PySide6.QtWidgets import (
 from ... import APP_NAME
 from ...i18n import t
 from ...uninstall import (
-    delete_registry_path,
+    delete_leftover_items,
     find_leftovers,
     get_installed_apps,
     launch_uninstaller,
 )
-from ...utils import _delete_path, format_size
+from ...utils import format_size
 from .. import icons
 from ..dialogs import app_confirm, app_info, readonly_toplevel
 from ..tree_helpers import fill_tree, make_tree, selected_one
@@ -253,16 +253,15 @@ class UninstallPage(QWidget):
                   self._delete_leftovers_done, on_error=self._leftover_error)
 
     def _delete_leftovers_worker(self):
-        ok = 0
-        err = 0
-        for kind, p in self.leftovers:
-            deleted = delete_registry_path(p) if kind == "registry" \
-                else _delete_path(p, to_recycle=self._recycle_enabled())
-            if deleted:
-                ok += 1
-            else:
-                err += 1
-        return ok, err
+        """Delete leftovers via the audit-logged core service (Lote D6).
+
+        delete_leftover_items() dispatches registry keys to
+        delete_registry_path() and files to the central delete-safety
+        gate, recording failures + a summary in audit.jsonl.
+        Returns (ok, err) exactly as before.
+        """
+        return delete_leftover_items(self.leftovers,
+                                     to_recycle=self._recycle_enabled())
 
     def _recycle_enabled(self) -> bool:
         """True when the user opted for recycle-bin instead of delete."""

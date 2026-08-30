@@ -42,6 +42,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
@@ -973,8 +974,8 @@ def _rotate_log_file(path: str, max_bytes: int, backups: int = 2) -> None:
     generation 1.
 
     Thread model: callers writing concurrently MUST serialize around this
-    helper plus the append (AuditLogger holds such a lock; _errlog logs
-    are fire-and-forget best effort). Losing a rotation race to another
+    helper plus the append (both AuditLogger and _errlog hold such a
+    lock, Lote D4). Losing a rotation race to another
     process is harmless — os.replace fails, the line lands in the
     un-rotated file and the next writer retries.
 
@@ -1002,6 +1003,12 @@ def _rotate_log_file(path: str, max_bytes: int, backups: int = 2) -> None:
             os.replace(path, f"{path}.1")
     except OSError:
         pass
+
+
+# Serialization for _errlog writes: rotation + append must be atomic
+# against concurrent worker threads, or lines interleave/corrupt right
+# when the error log matters most (Lote D4).
+_ERRLOG_LOCK = threading.Lock()
 
 
 def _errlog(msg: str, level: str = "error", component: str = "") -> None:
@@ -1045,9 +1052,10 @@ def _errlog(msg: str, level: str = "error", component: str = "") -> None:
     }, ensure_ascii=False)
     logfile = os.path.join(get_logs_dir(), "limpiapro_error.log")
     try:
-        _rotate_log_file(logfile, _ERRLOG_MAX_BYTES, _LOG_BACKUPS)
-        with open(logfile, "a", encoding="utf-8") as f:
-            f.write(record + "\n")
+        with _ERRLOG_LOCK:  # Lote D4: rotation+append serialized
+            _rotate_log_file(logfile, _ERRLOG_MAX_BYTES, _LOG_BACKUPS)
+            with open(logfile, "a", encoding="utf-8") as f:
+                f.write(record + "\n")
     except Exception:
         pass  # nosec B110 - error logging must never itself fail
 

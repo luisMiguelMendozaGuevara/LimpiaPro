@@ -61,6 +61,29 @@ def test_ci_workflow_push_trigger_stays_intact():
     assert re.search(r"branches:\s*\[main\]", text)
 
 
+def test_ci_actions_pinned_by_full_sha():
+    # Lote D1: actions referenced by mutable tags (@v4) let a compromised
+    # upstream repository run code in CI; every `uses:` must carry a full
+    # 40-hex commit SHA (human-readable version kept as trailing comment).
+    text = WF_PATH.read_text(encoding="utf-8")
+    uses = re.findall(r"^\s*-?\s*uses:\s*(\S+)", text, re.M)
+    assert uses, "no actions found in ci.yml"
+    for ref in uses:
+        _, _, version = ref.partition("@")
+        assert re.fullmatch(r"[0-9a-f]{40}", version), \
+            f"action not pinned by full SHA: {ref}"
+
+
+def test_ci_lint_tools_come_from_pinned_requirements():
+    # Lote D1: floating `pip install ruff pyright bandit` in the lint job
+    # already broke the Bandit gate once (1.7 -> 1.9 jump); the lint tools
+    # must come from the exact pins of requirements-dev.txt (S7 policy).
+    text = WF_PATH.read_text(encoding="utf-8")
+    assert not re.search(r"pip install ruff pyright bandit", text)
+    assert re.search(
+        r"pip install -r requirements\.txt -r requirements-dev\.txt", text)
+
+
 # -------------------------------------------- S2a redact_user_paths()
 
 @pytest.fixture()
