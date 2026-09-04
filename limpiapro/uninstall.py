@@ -368,6 +368,45 @@ def split_command(cmd):
     return [exe, *tokens[1:]], None
 
 
+def uninstall_risk(command: str) -> str:
+    """Classify where an UninstallString's executable lives (Lote F1/S1).
+
+    The whole app normally runs elevated, so a tampered HKCU
+    UninstallString would execute attacker-chosen code AS ADMIN.
+    split_command already verifies the executable exists; this adds a
+    location-based verdict for the confirmation flow:
+
+    Returns:
+        str: "temp"   - under a user-writable TEMP dir (refused outright:
+                        no legitimate uninstaller lives there and it is
+                        the classic registry-abuse pattern);
+             "user"   - inside the user profile (user-writable: every
+                        program can plant/replace it, so the UI confirms
+                        with an explicit warning);
+             "system" - anywhere else (Program Files, etc.).
+    """
+    argv, _err = split_command(command)
+    if argv is None:
+        return "system"  # split_command reports the parse error itself
+    exe = os.path.normcase(os.path.normpath(os.path.abspath(argv[0])))
+    for var in ("TEMP", "TMP"):
+        val = os.environ.get(var)
+        if not val:
+            continue
+        root = os.path.normcase(os.path.normpath(
+            os.path.abspath(os.path.expandvars(val))))
+        if exe == root or exe.startswith(root + os.sep):
+            return "temp"
+    try:
+        profile = os.path.normcase(os.path.normpath(
+            os.path.expanduser("~")))
+    except Exception:
+        profile = ""
+    if profile and (exe == profile or exe.startswith(profile + os.sep)):
+        return "user"
+    return "system"
+
+
 def launch_uninstaller(command):
     """Safely launch a registry UninstallString.
     
@@ -387,10 +426,15 @@ def launch_uninstaller(command):
         - Uses subprocess.Popen with shell=False and CREATE_NO_WINDOW flag.
         - The uninstaller runs asynchronously (returns immediately).
         - Error messages are stable English/ASCII for UI translation.
+        - Lote F1 (S1): an executable under a user-writable TEMP dir is
+          REFUSED — the app runs elevated, so a planted uninstaller there
+          would be arbitrary admin-code execution from HKCU data.
     """
     argv, err = split_command(command)
     if argv is None:
         return False, err
+    if uninstall_risk(command) == "temp":
+        return False, "refused: uninstaller executable lives in a temporary folder"
     try:
         subprocess.Popen(argv, shell=False,  # nosec B603 - arg list, no shell
                          creationflags=subprocess.CREATE_NO_WINDOW)

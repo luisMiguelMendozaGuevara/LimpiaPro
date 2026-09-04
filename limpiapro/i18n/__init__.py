@@ -14,8 +14,8 @@ Design rules:
 """
 
 import ctypes
-import locale as _locale
 import os
+import sys
 
 from ..utils import _errlog
 from .en import STRINGS as _EN
@@ -25,6 +25,41 @@ from .es import STRINGS as _ES
 # table: current language -> Spanish (the project's original language).
 _STRINGS = {"es": _ES, "en": _EN}
 
+_WIN = sys.platform == "win32"
+
+# LOCALE_NAME_MAX_LENGTH from the Win32 API (limits GetUserDefaultLocaleName
+# buffers).
+_LOCALE_NAME_MAX = 85
+
+
+def _system_locale_name() -> str:
+    """Best-effort BCP-47 locale name without deprecated APIs.
+
+    Windows: GetUserDefaultLocaleName (Vista+, the modern replacement for
+    locale.getdefaultlocale(), which is deprecated and slated for removal).
+    Elsewhere: the standard locale environment variables, in gettext's
+    precedence order. Empty string when nothing can be determined.
+    """
+    if _WIN:
+        name = ""
+        try:
+            buf = ctypes.create_unicode_buffer(_LOCALE_NAME_MAX)
+            if ctypes.windll.kernel32.GetUserDefaultLocaleName(
+                    buf, _LOCALE_NAME_MAX):
+                name = buf.value
+        except Exception:
+            name = ""  # best-effort: the env-var lookup below still runs
+        if name:
+            return name
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        val = os.environ.get(var)
+        # "C"/"POSIX" mean "neutral locale": the deprecated
+        # locale.getdefaultlocale() mapped them to (None, None), so they
+        # must fall through to the next variable, not match "es"/"en".
+        if val and val not in ("C", "POSIX"):
+            return val
+    return ""
+
 
 def detect_language():
     """Return the UI language code: "es" (Spanish Windows) or "en" (anything
@@ -33,7 +68,8 @@ def detect_language():
     Resolution order:
       1. LIMPIAPRO_LANG environment variable (development/testing override).
       2. GetUserDefaultUILanguage(): primary language id 10 == Spanish.
-      3. locale.getdefaultlocale() as a last resort if the Win32 call fails.
+      3. _system_locale_name() (GetUserDefaultLocaleName / env vars) as a
+         last resort if the Win32 UI-language call fails.
     """
     override = (os.environ.get("LIMPIAPRO_LANG") or "").strip().lower()
     if override[:2] in _STRINGS:
@@ -45,10 +81,10 @@ def detect_language():
         return "en"
     except Exception:
         try:
-            loc = (_locale.getdefaultlocale()[0] or "").lower()
+            loc = _system_locale_name()
         except Exception:
             loc = ""
-        return "es" if loc.startswith("es") else "en"
+        return "es" if loc.lower().startswith("es") else "en"
 
 
 LANG = detect_language()

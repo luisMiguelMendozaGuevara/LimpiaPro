@@ -50,6 +50,7 @@ from .. import APP_NAME, APP_VERSION
 from ..i18n import t
 from ..settings import Settings
 from ..utils import _errlog, format_size, humanize_duration, is_admin
+from ..winapp2 import default_winapp_file
 from . import constants, icons
 from . import theme as ui_theme
 from .dialogs import app_info, readonly_toplevel, structured_confirm
@@ -88,7 +89,8 @@ class MainWindow(QMainWindow):
         settings (Settings): The application's user preferences.
         controller (LimpiaProController): The MVC controller instance.
         busy (bool): Global busy flag.
-        scanner: Legacy scanner reference (unused in PySide6).
+        scanner: Most recent DuplicateScanner (set by duplicates_page; its
+                 snapshot feeds duplicate deletion).
         _pages (dict): Cache of instantiated page widgets.
         _closing (bool): Flag to prevent multiple close attempts.
     """
@@ -105,12 +107,22 @@ class MainWindow(QMainWindow):
         super().__init__()
         from ..controller import LimpiaProController as _LPC
         self.settings = (settings or Settings.load()).validate()
-        self.controller = controller or _LPC()
+        # E2.1: never parse the bundled winapp2.ini synchronously here —
+        # that delayed the first visible frame by the whole detection pass.
+        # The rules load on a worker right after the window paints.
+        self.controller = controller or _LPC(defer_winapp=True)
         self.busy = False
         self.scanner = None
         self._pages: dict[str, QWidget] = {}
         self._closing = False
         self._auto_analyze_done = False
+        # E2.1: the bundled winapp2.ini parses on a worker AFTER the first
+        # paint (defer_winapp controller); the auto-analysis only waits for
+        # it when the cache is stale and a scan is actually due.
+        self._winapp_ready = False
+        self._winapp_load_is_startup = True
+        self._winapp_retries = 0
+        self._auto_analyze_pending = False
 
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION} - {t('app.window_subtitle')}")
         self.resize(1000, 680)
@@ -229,8 +241,11 @@ class MainWindow(QMainWindow):
                             f"({type(page).__name__}): {e!r}")
 
     def showEvent(self, event) -> None:
-        """Start the first auto-analysis once the window has painted."""
+        """Start the deferred winapp load and the first auto-analysis once
+        the window has painted."""
         super().showEvent(event)
+        if not self._winapp_ready:
+            QTimer.singleShot(0, self._startup_winapp_load)
         if self.settings.auto_analyze and not self._auto_analyze_done:
             self._auto_analyze_done = True
             QTimer.singleShot(constants.ANALYZE_DEFER_MS,
@@ -253,7 +268,47 @@ class MainWindow(QMainWindow):
             self.set_status(t("status.cached",
                               age=humanize_duration(age)))
             return
+        if not self._winapp_ready:
+            # The rules are still loading on the worker: without them the
+            # winapp row would measure 0 and never be refreshed. Wait.
+            self._auto_analyze_pending = True
+            return
         self.analyze_all()
+
+    def _startup_winapp_load(self) -> None:
+        """Load the bundled winapp2.ini after the first paint (E2.1).
+
+        The parse + detection pass probes thousands of registry keys and
+        paths (0.2-0.5 s on Windows); doing it inside controller
+        construction delayed every startup's first frame. Runs
+        unconditionally: the rules are needed even when auto-analysis is
+        disabled."""
+        if self._winapp_ready:
+            return
+        cat = next((c for c in self.controller.categories
+                    if c.key == "winapp"), None)
+        if cat is None or cat.rules:
+            # No winapp category (injected test controllers) or the
+            # controller already parsed the ini synchronously.
+            self._winapp_ready = True
+            self._maybe_run_pending_analysis()
+            return
+        if self.controller.busy:
+            # Something else went busy first (e.g. an immediate refresh):
+            # retry briefly, then give up (rules can still be loaded
+            # manually from the clean page).
+            if self._winapp_retries < 20:
+                self._winapp_retries += 1
+                QTimer.singleShot(100, self._startup_winapp_load)
+            return
+        self._winapp_load_is_startup = True
+        self.controller.load_winapp_rules(default_winapp_file())
+
+    def _maybe_run_pending_analysis(self) -> None:
+        """Run the auto-analysis that was waiting for the winapp rules."""
+        if self._auto_analyze_pending:
+            self._auto_analyze_pending = False
+            self._auto_analyze_startup()
 
     # -------------------------------------------------------- navigation
 
@@ -444,6 +499,7 @@ class MainWindow(QMainWindow):
             return
         self.set_busy(True, mode="indeterminate")
         self.set_status(t("status.parsing_winapp"))
+        self._winapp_load_is_startup = False
         self.controller.load_winapp_rules(path)
 
     # ------------------------------------------------- controller wiring
@@ -491,7 +547,9 @@ class MainWindow(QMainWindow):
         if msg.startswith("cleaning:"):
             self.set_status(t("log.cleaning_cat", label=msg.split(":", 1)[1]))
         elif msg.startswith("cleaned:"):
-            _kind, _label, r, e, f = msg.split(":")
+            # maxsplit=4: a category label containing ':' must not break
+            # the (kind, label, removed, errors, freed) unpacking.
+            _kind, _label, r, e, f = msg.split(":", 4)
             self.log(t("log.cat_cleaned", n=r, e=e, size=format_size(int(f))))
         elif msg.startswith("recycle:"):
             # recycle:{label}:ok | recycle:{label}:<failure message>
@@ -537,15 +595,26 @@ class MainWindow(QMainWindow):
                  t("msg.preview_error", exc=message))
 
     def _on_winapp_loaded(self, count: int) -> None:
+        self._winapp_ready = True
         self.pages_clean._build_rows()
         self.set_status(t("status.winapp_loaded", n=count))
         self.log(t("log.winapp_loaded", n=count, path=""))
-        self.analyze_all()
+        if self._winapp_load_is_startup:
+            # Deferred startup load: analyze ONLY if the auto-analysis is
+            # still waiting for these rules (fresh cache already painted
+            # its numbers; auto_analyze off means no scan at all).
+            self._maybe_run_pending_analysis()
+        else:
+            # Manual load from the clean page: refresh the analysis, as
+            # this handler always did before E2.1.
+            self.analyze_all()
 
     def _on_winapp_error(self, message: str) -> None:
+        self._winapp_ready = True
         self.set_status(t("status.winapp_error"))
         app_info(self, "critical", APP_NAME,
                  t("msg.winapp_error", exc=message))
+        self._maybe_run_pending_analysis()
 
     def _on_operation_error(self, message: str) -> None:
         _errlog(f"operation error: {message}")

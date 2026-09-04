@@ -43,6 +43,12 @@ from . import BLOCK_SIZE
 from .audit_log import audit
 from .utils import _delete_measured, iter_file_sizes
 
+# Lote F2 (P3): hashlib.file_digest (Python 3.11+) runs the chunked
+# read+update loop in C with a bigger buffer — measurably less Python
+# overhead per byte than the manual loop, which stays as the 3.10
+# fallback (pyproject still promises >=3.10; same digest either way).
+_file_digest = getattr(hashlib, "file_digest", None)
+
 
 def delete_duplicates(paths, snapshot, to_recycle: bool = False):
     """Delete user-selected duplicate files with audit logging (Lote D6).
@@ -189,6 +195,10 @@ class DuplicateScanner:
         with open(path, "rb") as f:
             if not full:
                 h.update(f.read(DuplicateScanner.PREHASH_SIZE))
+            elif _file_digest is not None:
+                # P3: C-level read/update loop; identical BLAKE2b digest
+                # to the manual chunk walk below.
+                h = _file_digest(f, lambda: hashlib.blake2b(digest_size=16))
             else:
                 while True:
                     block = f.read(BLOCK_SIZE)

@@ -34,6 +34,7 @@ from ...uninstall import (
     find_leftovers,
     get_installed_apps,
     launch_uninstaller,
+    uninstall_risk,
 )
 from ...utils import format_size
 from .. import icons
@@ -166,9 +167,21 @@ class UninstallPage(QWidget):
         if not app["uninstall"]:
             app_info(self, "warning", APP_NAME, t("msg.no_uninstall_cmd"))
             return
+        # Lote F1 (S1): the app runs elevated, so a tampered HKCU
+        # UninstallString would execute attacker-chosen code as admin.
+        # Refuse temp-dir executables outright and warn explicitly when
+        # the executable lives inside the (user-writable) profile.
+        risk = uninstall_risk(app["uninstall"])
+        if risk == "temp":
+            app_info(self, "critical", APP_NAME,
+                     t("msg.uninstall_temp_refused"))
+            return
+        message = t("msg.run_uninstaller", name=app["name"],
+                    cmd=app["uninstall"])
+        if risk == "user":
+            message += t("msg.uninstall_user_warn")
         if not app_confirm(self, "warning", APP_NAME,
-                           t("msg.run_uninstaller", name=app["name"],
-                             cmd=app["uninstall"]),
+                           message,
                            yes_text=t("btn.uninstall_yes")):
             return
         # No shell=True: the command is split, the executable is verified

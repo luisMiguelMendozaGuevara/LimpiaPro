@@ -5,7 +5,7 @@ Todos los cambios notables de este proyecto se documentarán en este archivo.
 El formato está basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.0.0/),
 y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 
-## [Unreleased]
+## [2.8] - 2026-09-03
 
 ### Added
 
@@ -57,6 +57,227 @@ y este proyecto adhiere a [Semantic Versioning](https://semver.org/lang/es/).
 - `delete_registry_path` (restos de desinstalador) ahora registra el
   motivo del fallo en `limpiapro_error.log` (antes se tragaba la excepción)
 - Test `test_redact_needs_boundary` aislado de `USERPROFILE`/`HOME` reales
+
+#### Lote E1.1: compatibilidad Python 3.10/3.11 restaurada
+- **`os.path.isjunction()` es API de Python 3.12** pero el proyecto declara
+  `requires-python = ">=3.10"`: en 3.10/3.11 TODO el núcleo de borrado y el
+  escaneo winapp2 lanzaban `AttributeError` (9 llamadas en `utils.py` + 1 en
+  `categories.py`, sin fallback)
+- Nueva abstracción única `utils.is_junction()`: nativa en 3.12+, fallback
+  Windows 3.10/3.11 que lee el reparse tag con stat sin seguir enlaces
+  (detecta junctions rotas; NO es un sustituto de `islink()` — la garantía
+  de no descender por junctions/symlinks queda intacta), `False` en POSIX
+- Guarda de test: ningún módulo fuera del shim puede referenciar
+  `os.path.isjunction` directamente
+
+### Changed
+
+#### Lote E1.2: versión única y coherente
+- `pyproject.toml` decía `2.5` mientras `APP_VERSION` era `2.7` (el tag
+  v2.7 ya existe): sincronizado a `2.7` + guarda de test que exige
+  `pyproject version == APP_VERSION`
+
+#### Lote E1.5: locale sin APIs deprecadas
+- `locale.getdefaultlocale()` (deprecado desde 3.11) sustituido por
+  `GetUserDefaultLocaleName` (Win32) + variables `LC_ALL`/`LC_MESSAGES`/
+  `LANG` (orden gettext, `C`/`POSIX` tratados como neutrales, igual que
+  hacía la API sustituida); prioridad de detección sin cambios
+- Los 3 tests de detección que solo pasaban en Windows ahora son
+  cross-platform (windll falso vía monkeypatch) — el baseline histórico
+  de fallos en Linux baja de 15 a 12
+
+#### Lote E1.6: matriz CI de Python 3.10 a 3.14
+- El job `test` solo probaba 3.12: la promesa `>=3.10` no se verificaba
+  en ningún sitio (así se coló el hueco de `isjunction`)
+- Nueva matriz `["3.10", "3.11", "3.12", "3.13", "3.14"]` (PySide6 6.11.2
+  soporta las 5), `fail-fast: false`; lint/build siguen en 3.12
+- `upload-artifact` se mantiene en v4: la v5 cambia semántica de
+  artefactos y no puede validarse desde este entorno
+
+### Removed
+
+#### Lote E1.3/E1.4: código muerto demostrado
+- `CleanupService`: instanciado en el controller y NUNCA consumido (los
+  workers llaman a las categorías directamente) y con contrato desfasado
+  (`clean()` sin `to_recycle` desde el Lote B2)
+- `confirm_destructive` (diálogo estilo pre-Qt6 sin llamadores) + el shim
+  transitorio `ui/widgets.py` (único importador restante: el smoke test,
+  ahora importa de `ui.workers`)
+- `PROGRESS_RULES` (constante sin uso desde D7), checks imposibles
+  `if scandir(...) is not None` (x2: `os.scandir` lanza o devuelve
+  iterador, nunca None), `from typing import Optional` en winapp2
+  (el archivo ya usa sintaxis `X | None`), `split(":")` → `split(":", 4)`
+  en el log de limpieza (un label con `:` rompía el desempaquetado)
+
+### Security
+
+#### Lote F1/S1: el desinstalador de HKCU ya no es ejecución admin a ciegas
+- La app corre ELEVADA: un UninstallString manipulado en HKCU ejecutaba
+  código elegido por un atacante COMO ADMIN (vector de elevación UAC)
+- `split_command` ya verificaba existencia; ahora `uninstall_risk()`
+  clasifica la ubicación del ejecutable: bajo **TEMP** se RECHAZA en el
+  lanzamiento (patrón clásico de abuso, nunca legítimo), dentro del
+  **perfil de usuario** (escribible por cualquier programa) la
+  confirmación añade un AVISO explícito, y la página de desinstalación
+  cablea ambos veredictos
+- La des-elevación real (token de explorer) exige WinAPI no probable
+  desde este entorno y queda documentada como mejora futura
+
+#### Lote F1/S5: los perfiles hermanos también se redactan en los logs
+- `redact_user_paths()` solo enmascaraba el home del usuario ACTUAL: una
+  línea de auditoría mencionando otro perfil (C:\Users\Ana desde una
+  sesión de C:\Users\Ana2) iba en texto claro
+- Ahora los prefijos `<raiz-de-usuarios>\<otro-perfil>` se enmascaran
+  como `~<perfil>`; la regla se limita a raíces literalmente llamadas
+  Users/home (C:\Users, /home, /Users) para que layouts exóticos
+  (home=/, /root, carpetas redirigidas) nunca conviertan esto en un
+  enmascarado total del disco; la frontera de prefijo se conserva
+
+#### Lote F1/S6: kill_process re-verifica la identidad justo antes del kill
+- TOCTOU: entre el listado (o el nombre suministrado) y `taskkill /PID`
+  el PID podía haberse RECICLADO y el kill habría matado OTRO proceso
+- Ahora se re-resuelve el nombre vivo inmediatamente antes del taskkill
+  y se exige coincidencia (sin .exe e insensible a mayúsculas); un PID
+  salido o cambiado ⇒ rechazo fail-closed con el nombre actual en el
+  mensaje
+
+### Changed
+
+#### Lote F3/O1-lite: el escaneo no filtra tamaños intermedios al hilo UI
+- `_scan_rules()` y el escaneo de locations mutaban `self.size/self.files`
+  tras CADA raíz mientras el hilo UI los leía (O1): totales a medio día
+  visibles en la UI
+- Ahora acumulan en variables locales y hacen UN solo commit al final;
+  durante el escaneo la UI ve los valores pre-scan estables y después los
+  finales consistentes (la ventana de mutación se reduce a una
+  asignación; el refactor completo de estado inmutable queda documentado
+  como no factible sin arquitectura nueva)
+
+#### Lote F3/O2: contratos sincronizados con el núcleo real
+- `CacheStore` ahora declara `age_seconds`/`is_fresh` (que main_window ya
+  consume desde B1), `CleanCategoryProtocol.clean` refleja la firma real
+  (`on_file`, `to_recycle`) y `scan` documenta que devuelve BYTES (decía
+  "número de ficheros")
+- O5 (rutas de categorías) verificado y RECHAZADO: ya están centralizadas
+  en `user_dirs()` — moverlas sería churn sin beneficio
+
+#### Lote F3/O4: el núcleo ya no devuelve etiquetas en español
+- `startup.py` retornaba "Usuario (HKCU Run)"/"Sistema (HKLM Run)" contra
+  la regla backend-English del repo; ahora devuelve tags estables
+  ("User (HKCU Run)"...) y la página de Inicio los traduce vía i18n
+  (español idéntico al anterior en pantalla); O6 (funciones largas)
+  pospuesto: refactor de puro estilo con riesgo de regresión alto
+
+### Performance
+
+#### Lote F2/P3: hashing de duplicados via hashlib.file_digest
+- El bucle manual de chunks (BLAKE2b) pasaba por Python por cada 1 MiB;
+  `hashlib.file_digest` (3.11+) ejecuta lectura+update en C con buffer
+  mayor — mismo digest, menos overhead por byte
+- `getattr(hashlib, "file_digest", None)` con el bucle manual como
+  fallback: `requires-python >=3.10` sigue prometido (misma disciplina
+  que el shim `is_junction` del E1.1); tests de equivalencia de digest
+  en ambas rutas + guarda de que la vía C se ejercita en 3.11+
+
+#### Lote F2/P4: los iconos de inicio ya no bloquean la tabla
+- La extracción de iconos de shell (~10-50 ms fríos por entrada, 15-40
+  entradas) corría ANTES de pintar las filas: hasta ~1,5 s de tabla
+  congelada o vacía
+- Ahora las filas se pintan inmediatamente y los iconos se extraen UNO
+  por tick del bucle de eventos (la UI respira entre extracciones),
+  con caché por ruta de ejecutable: los refrescos siguientes son
+  instantáneos; QIcon se crea solo en el hilo GUI (QPixmap no es
+  thread-safe, descartada la extracción en worker)
+
+#### Lote E2.1: el parseo de winapp2.ini ya no retrasa la primera ventana
+- `build_categories(load_winapp=)` + `LimpiaProController(defer_winapp=)`:
+  la categoría winapp se crea VACÍA y el ini bundled (~1,8 MB, ~3.400
+  condiciones de registro/fichero, 0,2-0,5 s en Windows) se carga por el
+  pipeline TaskWorker existente JUSTO DESPUÉS de la primera pintura
+- Secuenciado sin carreras: si la caché está vigente se pinta de inmediato
+  (la carga de reglas sigue en background); si hay que escanear, el
+  auto-análisis espera a `winapp_loaded`/`winapp_error` (flag
+  `_auto_analyze_pending`); `auto_analyze=False` no fuerza ningún escaneo
+- La carga manual desde la página Limpieza conserva su comportamiento
+  histórico (refilas + análisis); reintentos acotados si algo se puso busy
+  antes; error del ini ⇒ aviso crítico + análisis sin reglas winapp
+  (antes un ini roto mataba el arranque)
+
+#### Lote E2.2: visitar la pestaña Update ya no recorre WinSxS
+- El walk de `C:\Windows\WinSxS` (decenas de miles de ficheros, segundos
+  de I/O) solo corre cuando el usuario pulsa Analizar, una vez por
+  sesión (`_measured`); estado inicial del label "No analizado"
+- La capacidad de limpiar (DISM) no cambia; un fallo de medición permite
+  reintento en el siguiente clic y ya no toca el busy global (lo posee
+  DISM)
+
+#### Lote E2.3: schtasks en dos niveles (tabla rápida + estados async)
+- `get_scheduled_tasks()` usa la query NO verbose (4 columnas): rellenar
+  la tabla pasa de 3-15 s (resolución de ~12 campos x 200-800 tareas) a
+  ~1-2 s — alinea tasks.py con la decisión B3 de tasklist
+- Nuevo `get_task_states()`: la única vía hacia el estado
+  habilitada/deshabilitada sigue siendo /v, ahora aislada y asíncrona;
+  el merge respeta un token de secuencia (un resultado viejo no toca
+  datos nuevos) y preserva la selección del árbol
+- Columna muerta "Task To Run" retirada; filtros de filas basura y
+  fail-safe de errores idénticos al diseño P0
+
+#### Lote E3.1: LRU en la memo de padres de SafetyGuard
+- La caché de cadenas de padres (`_parent_clean`, cap 4096) se VACIABA
+  ENTERA al alcanzar el cap: una limpieza winapp2 grande (~14k FileKeys
+  que tocan decenas de miles de padres distintos) colapsaba el hit-rate
+  a cero a mitad de limpieza y forzaba miles de `realpath` extra
+- Ahora OrderedDict con eviction LRU de UNA entrada (O(1), mismo cap,
+  mismos valores); tests: eviction conserva los recientes, hit refresca
+  recencia, veredicto False memoizado con un solo realpath, invalidate
+
+#### Lote E3.2/E3.3: medidos y RECHAZADOS (sin cambio de código)
+- `ExcludeKey` precompilado vs `fnmatch.fnmatch` actual: 4% de diferencia
+  en un benchmark de 50k candidatos x 86 excludes — fnmatch ya cachea los
+  patrones compilados internamente; no justifica tocar el hot path de
+  matching (script: `tools/bench_excludekey.py`)
+- Reutilizar el pool de `_parallel_map`: crear ThreadPoolExecutor cuesta
+  ~0,2 ms por llamada (~30 llamadas/sesión = ~6 ms); el threshold serie
+  para lotes pequeños ya existía; DEFAULT_WORKERS=4 se mantiene por la
+  estabilidad en HDD (script: `tools/bench_baseline_lote_e.py`)
+
+### Tests
+
+#### Lote F3: +7 tests nuevos
+- `tests/test_lote_f3.py`: paridad matcher unificado (preview==medición),
+  exclusiones activas en el generador, commit único del estado de scan en
+  ambas rúas (rules/locations), superficie de contratos (CacheStore con
+  frescura, clean con on_file/to_recycle), tags core en inglés ASCII y su
+  mapeo i18n completo en ambas tablas
+
+#### Lote F2: +4 tests nuevos
+- `tests/test_lote_f2.py`: digest BLAKE2b idéntico entre file_digest y el
+  bucle manual 3.10 (hash multi-chunk y prehash), guarda de que la vía C
+  se ejercita en 3.11+ y guarda de render-antes-que-iconos con caché
+
+#### Lote E3: +4 tests nuevos
+- `tests/test_lote_e3.py`: eviction LRU conserva los recientes y respeta
+  el cap, hit refresca recencia, veredicto negativo memoizado con un solo
+  realpath, cap nunca excedido + invalidate limpia
+
+#### Lote E2: +8 tests nuevos
+- `tests/test_lote_e2.py`: query rápida sin /v (guarda anti-regresión) con
+  CSV no-verbose ES realista (cabeceras localizadas, filas basura y
+  malformadas), query verbose para estados, errores fail-safe,
+  `build_categories` diferido que NUNCA parsea / por defecto SÍ parsea,
+  controller con `defer_winapp`, y guardas de cableado (main_window
+  diferido y secuenciado, Update midiendo solo bajo demanda)
+- `tests/test_p0_regressions.py`: fixture de fila malformada adaptada a la
+  norma de 4 columnas de la query rápida (la intención P0 no cambia)
+
+#### Lote E1: +13 tests nuevos
+- `tests/test_lote_e.py` (10): semántica de `is_junction` (fichero/dir/
+  symlink/symlink roto/inexistente), fallback reparse-tag (mount point
+  detectado, symlink-tag rechazado, sin tag, OSError), guardas anti-regresión
+  (isjunction solo en el shim, código muerto, versión sincronizada, matriz
+  CI con 3.10/3.11) y sanity end-to-end de borrado a través del shim
+- `tests/test_i18n.py`: 3 tests de detección hechos cross-platform + 2
+  nuevos (fallback por variables de entorno y su precedencia)
 
 ## [2.6] - 2026-08-29
 

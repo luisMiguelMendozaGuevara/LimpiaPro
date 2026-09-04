@@ -56,6 +56,7 @@ import contextlib
 import ctypes
 import os
 import re
+from collections import OrderedDict
 from ctypes import wintypes
 
 # Well-known user folders (FOLDERID constants). Their real locations are
@@ -116,6 +117,10 @@ _KF_FLAG_DONT_VERIFY = 0x00004000
 # Cap for the parent-chain memo used by the per-file fast path.
 # Prevents unbounded memory growth in long-running sessions while still
 # providing cache hits for the thousands of files sharing the same parent.
+# Eviction is LRU (E3.1): the bundled winapp2.ini carries ~14k FileKeys,
+# so one large clean touches far more than 4096 distinct parents — the
+# old clear()-on-cap policy reset the hit-rate to zero mid-run and forced
+# thousands of extra realpath syscalls.
 _PARENT_CACHE_CAP = 4096
 
 # --- Lote D5: critical-file deny-list ---------------------------------
@@ -304,7 +309,8 @@ class SafetyGuard:
         self._exact_roots: frozenset[str] | None = None
         self._user_roots: frozenset[str] | None = None
         # parent dir (normcased) -> True when its chain has no junction.
-        self._parent_clean: dict[str, bool] = {}
+        # OrderedDict for O(1) LRU eviction at the cap (E3.1).
+        self._parent_clean: OrderedDict[str, bool] = OrderedDict()
         # Lote D5: canonical critical trees + windows dir (lazy).
         self._critical_trees: frozenset[str] | None = None
         self._windows_dir: str | None = None
@@ -543,19 +549,29 @@ class SafetyGuard:
             bool: True if the parent directory chain has no junctions, False otherwise.
             
         Notes:
-            - Memoization: Results are cached in self._parent_clean (dict).
-            - Cache cap: Limited to _PARENT_CACHE_CAP (4096) entries to prevent
-              unbounded memory growth. When the cap is reached, the cache is
-              cleared and repopulated.
+            - Memoization: Results are cached in self._parent_clean
+              (OrderedDict). Hits are refreshed to the recency end; when
+              the cap is reached the SINGLE OLDEST entry is evicted (LRU,
+              E3.1) instead of clearing the whole cache, which used to
+              collapse the hit-rate on large winapp2 cleans.
+            - Thread-safety: same profile as before — single GIL-atomic
+              dict operations, no cross-thread invariant beyond "values
+              are pure functions of the path".
         """
         parent = os.path.dirname(norm)
         cached = self._parent_clean.get(parent)
         if cached is None:
+            # Comparison must be normcase both sides; comparing a
+            # normcased realpath to a raw parent fails on Windows when the
+            # test uses POSIX "/dirs/..." style paths (E3, Windows).
+            norm_parent = os.path.normcase(os.path.normpath(parent))
             cached = (os.path.normcase(os.path.normpath(
-                os.path.realpath(parent))) == parent)
+                os.path.realpath(parent))) == norm_parent)
             if len(self._parent_clean) >= _PARENT_CACHE_CAP:
-                self._parent_clean.clear()
+                self._parent_clean.popitem(last=False)
             self._parent_clean[parent] = cached
+        else:
+            self._parent_clean.move_to_end(parent)
         return cached
 
     def _under_protected(self, norm: str) -> bool:

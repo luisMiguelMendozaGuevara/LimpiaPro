@@ -31,26 +31,26 @@ _RUN_PAIRS = [
     (winreg.HKEY_CURRENT_USER,
      r"Software\Microsoft\Windows\CurrentVersion\Run",
      r"Software\Microsoft\Windows\CurrentVersion\RunDisabled",
-     "Usuario (HKCU Run)"),
+     "User (HKCU Run)"),
     (winreg.HKEY_CURRENT_USER,
      r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
      r"Software\Microsoft\Windows\CurrentVersion\RunOnceDisabled",
-     "Usuario (HKCU RunOnce)"),
+     "User (HKCU RunOnce)"),
     (winreg.HKEY_LOCAL_MACHINE,
      r"Software\Microsoft\Windows\CurrentVersion\Run",
      r"Software\Microsoft\Windows\CurrentVersion\RunDisabled",
-     "Sistema (HKLM Run)"),
+     "System (HKLM Run)"),
     (winreg.HKEY_LOCAL_MACHINE,
      r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
      r"Software\Microsoft\Windows\CurrentVersion\RunOnceDisabled",
-     "Sistema (HKLM RunOnce)"),
+     "System (HKLM RunOnce)"),
 ]
 
 # Active keys (for listing startup apps).
 RUN_KEYS = [(h, a, src) for h, a, _d, src in _RUN_PAIRS]
 
 # Disabled keys (for the "re-enable" list).
-RUN_KEYS_DISABLED = [(h, d, "Usuario (desactivadas)") for h, _a, d, _s in _RUN_PAIRS]
+RUN_KEYS_DISABLED = [(h, d, "User (disabled)") for h, _a, d, _s in _RUN_PAIRS]
 
 # Map: (hive, active key) -> (hive, disabled key).
 # This lookup table allows quick resolution of the disabled counterpart

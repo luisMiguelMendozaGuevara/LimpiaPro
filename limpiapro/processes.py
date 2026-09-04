@@ -145,6 +145,17 @@ def kill_process(pid, name=None):
         # and this call; refusing is the safe outcome.
         return False, "unresolved: could not verify process name; refusing to kill"
 
+    # Lote F1 (S6) — TOCTOU re-verification: the identity check above may
+    # run seconds after the list snapshot (or use a caller-supplied name).
+    # If the PID was recycled in between, taskkill /F would hit a
+    # DIFFERENT process. Re-resolve the live name right before the kill
+    # and require a match (extension/case-insensitive).
+    live = _name_for(pid)
+    stem = lambda s: s.lower().removesuffix(".exe")  # noqa: E731
+    if not live or stem(live) != stem(name):
+        return False, (f"unresolved: pid {pid} now resolves to "
+                       f"{live or 'nothing'}; refusing to kill")
+
     try:
         # /F = force termination
         # /PID = specify process by ID

@@ -38,6 +38,18 @@ class CacheStore(Protocol):
         """
         ...
 
+    def age_seconds(self, now: float | None = None) -> float | None:
+        """Age of the cached snapshot in seconds (None when absent).
+
+        Consumed by the incremental startup (B1): the UI shows how old
+        the applied cache is (main_window._auto_analyze_startup).
+        """
+        ...
+
+    def is_fresh(self, max_age_seconds: float | None = None, now: float | None = None) -> bool:
+        """True when the cache can stand in for a fresh analysis."""
+        ...
+
 
 class CleanCategoryProtocol(Protocol):
     """Protocol for a cleaning category.
@@ -66,11 +78,13 @@ class CleanCategoryProtocol(Protocol):
         """Scan the category to compute size and file count.
 
         Args:
-            on_progress: Callback invoked with the number of files scanned so far.
+            on_progress: Callback invoked periodically with the running
+                file count.
             should_cancel: Callback that returns True if the scan should abort.
 
         Returns:
-            int: The number of files scanned.
+            int: The total size in BYTES of all matched targets (the file
+                 count lands in the category's ``files`` attribute).
         """
         ...
 
@@ -87,16 +101,22 @@ class CleanCategoryProtocol(Protocol):
 
     def clean(
         self,
-        target_bytes: int = 0,
+        on_file: Callable[[str], None] | None = None,
         on_progress: Callable[[float], None] | None = None,
+        target_bytes: int = 0,
         should_cancel: Callable[[], bool] | None = None,
+        to_recycle: bool = False,
     ) -> tuple[int, int, int]:
-        """Execute the deletion operation.
+        """Execute the deletion operation (signature mirrors the core).
 
         Args:
-            target_bytes: Expected total bytes to free (for progress calculation).
+            on_file: Callback invoked with each target path before
+                deletion (UI logging).
             on_progress: Callback invoked with progress fraction (0.0 to 1.0).
+            target_bytes: Expected total bytes to free (for progress calculation).
             should_cancel: Callback that returns True if the clean should abort.
+            to_recycle: Move targets to the recycle bin instead of
+                deleting them permanently (Lote B2 opt-in).
 
         Returns:
             tuple: (removed_count, error_count, freed_bytes).

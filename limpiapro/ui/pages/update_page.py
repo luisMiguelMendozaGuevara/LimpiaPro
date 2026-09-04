@@ -68,7 +68,7 @@ class UpdatePage(QWidget):
         self.clean_btn = QPushButton(t("btn.clean_updates"))
         self.clean_btn.setProperty("kind", "warning")
         self.clean_btn.clicked.connect(self.clean)
-        self.size_lbl = QLabel(t("label.calculating"))
+        self.size_lbl = QLabel(t("update.not_measured"))
         self.size_lbl.setObjectName("mutedText")
         bar.addWidget(self.analyze_btn)
         bar.addWidget(self.clean_btn)
@@ -82,11 +82,12 @@ class UpdatePage(QWidget):
         self.out.setLineWrapMode(QPlainTextEdit.WidgetWidth)
         lay.addWidget(self.out, 1)
 
-        # The constructor triggers the WinSxS measurement (the page is
-        # built lazily on first visit, so this runs once, off the UI
-        # thread).
-        run_async(self, self._measure, self._measure_done,
-                  on_error=self._measure_error)
+        # E2.2: the WinSxS walk (tens of thousands of entries) runs ONLY
+        # when the user asks for an analysis — visiting the tab used to
+        # pay 1-15 s of disk I/O just to fill a label. `_measured` keeps
+        # the session value; a failed measurement retries on the next
+        # click.
+        self._measured = False
 
     # ------------------------------------------------------------- state
 
@@ -111,8 +112,12 @@ class UpdatePage(QWidget):
     # ---------------------------------------------------------- actions
 
     def _measure_error(self, exc) -> None:
-        """Handle WinSxS measurement errors."""
-        self.host.set_busy(False)
+        """Handle WinSxS measurement errors.
+
+        Deliberately does NOT touch the global busy flag: since E2.2 the
+        measurement runs concurrently with the DISM analysis the user
+        requested, and DISM's own callback owns the busy state."""
+        self._measured = False  # allow a retry on the next Analyze click
         self.size_lbl.setText(t("update.not_available"))
         self.host.log(t("log.winsxs_error", exc=exc))
 
@@ -128,7 +133,15 @@ class UpdatePage(QWidget):
 
     def _measure_done(self, size) -> None:
         """Handle WinSxS measurement completion."""
+        self._measured = True
         self.size_lbl.setText(t("update.winsxs_size", size=format_size(size)))
+
+    def _measure_if_needed(self) -> None:
+        """Measure WinSxS once per session, only after user action (E2.2)."""
+        if self._measured:
+            return
+        run_async(self, self._measure, self._measure_done,
+                  on_error=self._measure_error)
 
     def _run_dism(self, args, label) -> None:
         """Run a DISM command with the given arguments."""
@@ -174,6 +187,9 @@ class UpdatePage(QWidget):
 
     def analyze(self) -> None:
         """Analyze the component store for cleanup potential."""
+        # Measure the folder size alongside the DISM analysis (both are
+        # background operations; DISM owns the busy state).
+        self._measure_if_needed()
         self._run_dism(["/AnalyzeComponentStore"], t("update.analyzing"))
 
     def clean(self) -> None:

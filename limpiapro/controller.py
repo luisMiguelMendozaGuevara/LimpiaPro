@@ -34,7 +34,7 @@ from . import APP_VERSION
 from .categories import build_categories
 from .paths import get_cache_file
 from .recycle import empty_recycle_bin, recycle_bin_size
-from .services import CacheService, CleanupService
+from .services import CacheService
 from .utils import _errlog
 from .winapp2 import invalidate_detect_cache, parse_winapp_rules
 
@@ -295,13 +295,23 @@ class LimpiaProController(QObject):
     busy_changed = Signal(bool)
 
     def __init__(self, categories=None, cache_service=None,
-                 parent: QObject | None = None):
+                 parent: QObject | None = None,
+                 defer_winapp: bool = False):
+        """Initialize the controller.
+
+        Args:
+            categories: Optional category list (tests inject tiny ones).
+            cache_service: Optional cache service override.
+            parent: Optional Qt parent.
+            defer_winapp: Build the winapp category WITHOUT parsing the
+                bundled ini (the UI defers that heavy parse to a worker
+                after the first paint via load_winapp_rules, E2.1).
+        """
         super().__init__(parent)
         self.categories = list(categories) if categories is not None \
-            else build_categories()
+            else build_categories(load_winapp=not defer_winapp)
         self.cache_service = cache_service or CacheService(
             get_cache_file(), 1, APP_VERSION)
-        self.cleanup_service = CleanupService()
         self._cancel_requested = False
         self._busy = False
         self._thread: QThread | None = None

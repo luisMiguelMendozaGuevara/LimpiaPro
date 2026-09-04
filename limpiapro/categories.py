@@ -33,6 +33,7 @@ from .utils import (
     _iter_tree_files,
     _parallel_map,
     glob_like,
+    is_junction,
     is_safe_delete_target,
 )
 from .winapp2 import default_winapp_file, parse_winapp_rules
@@ -221,15 +222,46 @@ class CleanCategory:
                                     existing, non-junction root.
                                     
         Notes:
-            - Junctions are detected with os.path.isjunction() and skipped.
+            - Junctions are detected with utils.is_junction() and skipped.
             - Roots are normalized with os.path.normcase() and os.path.abspath().
             - Only existing roots are yielded (os.path.exists check).
         """
         for rule in self.rules or []:
             root = os.path.normcase(os.path.abspath(
                 os.path.expandvars(rule.root)))
-            if os.path.exists(root) and not os.path.isjunction(root):
+            if os.path.exists(root) and not is_junction(root):
                 yield rule, root
+
+    def _iter_root_targets(self, rule, root, should_cancel=None):
+        """Yield (path, entry) targets for ONE (rule, root) pair.
+
+        Single source of truth for the winapp2 match/exclude logic (O3):
+        _iter_targets (preview/snapshot) and _scan_rules (measurement)
+        used to duplicate the mask-match + ExcludeKey check, which let
+        them drift apart. `entry` is the DirEntry from the shared
+        traversal (so the scan can stat for free) or None when the root
+        itself is the target file.
+
+        Args:
+            rule (WinAppRule): Rule whose masks/exclusions apply.
+            root (str): Normalized, existing, non-junction root path.
+            should_cancel (callable, optional): Cooperative cancellation.
+
+        Yields:
+            tuple[str, os.DirEntry | None]: (target_path, dir_entry_or_None).
+        """
+        if os.path.isfile(root):
+            if (self._match_re(os.path.basename(root), rule.patterns_re)
+                    and not rule.is_excluded(root)):
+                yield root, None
+            return
+        # One scandir traversal per root (never into junctions);
+        # DirEntry carries the stat, so the scan can reuse it.
+        for entry in _iter_tree_files(root, should_cancel,
+                                      recurse=rule.recurse):
+            if (self._match_re(entry.name, rule.patterns_re)
+                    and not rule.is_excluded(entry.path)):
+                yield entry.path, entry
 
     def _iter_targets(self, should_cancel=None):
         """Iterate over all targets the category would clean.
@@ -261,19 +293,9 @@ class CleanCategory:
             for rule, root in self._rule_roots():
                 if should_cancel and should_cancel():
                     return
-                if os.path.isfile(root):
-                    if (self._match_re(os.path.basename(root),
-                                       rule.patterns_re)
-                            and not rule.is_excluded(root)):
-                        yield rule, root
-                    continue
-                # One scandir traversal per root (never into junctions);
-                # DirEntry carries the stat, so the scan can reuse it.
-                for entry in _iter_tree_files(root, should_cancel,
-                                              recurse=rule.recurse):
-                    if (self._match_re(entry.name, rule.patterns_re)
-                            and not rule.is_excluded(entry.path)):
-                        yield rule, entry.path
+                for path, _entry in self._iter_root_targets(
+                        rule, root, should_cancel):
+                    yield rule, path
         else:
             for loc in self._locations_existing():
                 if should_cancel and should_cancel():
@@ -322,42 +344,40 @@ class CleanCategory:
               _parallel_map and contributes nothing; OSError on individual
               files is silently ignored inside the worker.
         """
-        self.size = 0
-        self.files = 0
         pairs = list(self._rule_roots())
 
         def _scan_one_root(pair):
             rule, root = pair
             root_size = 0
             root_files = 0
-            if should_cancel and should_cancel():
-                return root_size, root_files
-            if os.path.isfile(root):
-                if (self._match_re(os.path.basename(root),
-                                   rule.patterns_re)
-                        and not rule.is_excluded(root)):
-                    with contextlib.suppress(OSError):
-                        root_size += os.path.getsize(root)
-                    root_files += 1
-                return root_size, root_files
-            for entry in _iter_tree_files(root, should_cancel,
-                                          recurse=rule.recurse):
-                if (self._match_re(entry.name, rule.patterns_re)
-                        and not rule.is_excluded(entry.path)):
+            for path, entry in self._iter_root_targets(rule, root,
+                                                       should_cancel):
+                if entry is not None:
                     with contextlib.suppress(OSError):
                         root_size += entry.stat().st_size
-                    root_files += 1
+                else:
+                    with contextlib.suppress(OSError):
+                        root_size += os.path.getsize(path)
+                root_files += 1
             return root_size, root_files
 
         results = _parallel_map(_scan_one_root, pairs)
+        # O1-lite: accumulate LOCALLY and commit once. The worker thread
+        # used to mutate self.size/self.files after every root while the
+        # UI thread read them concurrently; now the UI only ever sees the
+        # pre-scan values or the final consistent ones.
+        total_size = 0
+        total_files = 0
         for res in results:
             if res is None:  # crashed worker: contributes nothing
                 continue
             size_part, files_part = res
-            self.size += size_part
-            self.files += files_part
+            total_size += size_part
+            total_files += files_part
             if on_progress:
-                on_progress(self.files)
+                on_progress(total_files)
+        self.size = total_size
+        self.files = total_files
         return self.size
 
     def scan(self, on_progress=None, should_cancel=None):
@@ -394,8 +414,6 @@ class CleanCategory:
             # Lote D7: locations are measured in parallel (per-location
             # workers return (size, files); progress is reported from this
             # thread after each location completes, never from workers).
-            self.size = 0
-            self.files = 0
             locs = self._locations_existing()
 
             def _scan_one_location(loc):
@@ -411,14 +429,19 @@ class CleanCategory:
                 return loc_size, 1
 
             results = _parallel_map(_scan_one_location, locs)
+            total_size = 0
+            total_files = 0
             for res in results:
                 if res is None:  # crashed worker: contributes nothing
                     continue
                 size_part, files_part = res
-                self.size += size_part
-                self.files += files_part
+                total_size += size_part
+                total_files += files_part
                 if on_progress:
-                    on_progress(self.files)
+                    on_progress(total_files)
+            # O1-lite: single commit instead of per-location mutation.
+            self.size = total_size
+            self.files = total_files
             size = self.size
         
         audit.log_operation(
@@ -643,23 +666,30 @@ class CleanCategory:
         return out
 
 
-def build_categories():
+def build_categories(load_winapp: bool = True):
     """Build the default category set with translated labels/descriptions.
-    
+
     Labels are resolved through i18n.t() at build time (the language is
     fixed at import, before any window exists). This function constructs
     the standard set of cleaning categories:
-    
+
     - temp: Temporary files (TEMP, Windows\\Temp, Prefetch)
     - browser: Browser caches (Edge, Chrome, Brave, Vivaldi, Opera, Firefox)
     - recycle: Recycle Bin (special case, uses shell API)
     - apps: Application caches (Explorer, CrashDumps, Windows Update, CBS logs)
     - history: Recent files history
     - winapp: Winapp2.ini rules (detected applications)
-    
+
+    Args:
+        load_winapp: Parse + detect the bundled winapp2.ini at build time
+            (the historical behavior, ~0.2-0.5 s on Windows). Pass False to
+            create the winapp category EMPTY so the UI can defer the heavy
+            parse to a worker thread after the first paint (Lote E2.1);
+            `controller.load_winapp_rules()` fills it in later.
+
     Returns:
         list[CleanCategory]: List of initialized CleanCategory instances.
-        
+
     Notes:
         - needs_admin flag is set for categories requiring elevated privileges.
         - Browser cache detection: Scans for profile-specific cache folders.
@@ -712,7 +742,8 @@ def build_categories():
         [d["recent"]], "\U0001F551")
     cats.append(cat_hist)
 
-    rules = (parse_winapp_rules(default_winapp_file())
+    rules = ((parse_winapp_rules(default_winapp_file())
+              if load_winapp else [])
              if os.path.exists(default_winapp_file()) else [])
     cat_winapp = CleanCategory(
         "winapp", t("cat.winapp.label"),

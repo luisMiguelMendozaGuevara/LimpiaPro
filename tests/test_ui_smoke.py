@@ -18,7 +18,7 @@ from limpiapro.controller import LimpiaProController
 from limpiapro.i18n import t
 from limpiapro.settings import Settings
 from limpiapro.ui.main_window import MainWindow
-from limpiapro.ui.widgets import run_async
+from limpiapro.ui.workers import run_async
 
 
 @pytest.fixture()

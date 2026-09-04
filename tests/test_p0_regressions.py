@@ -92,9 +92,11 @@ class TestScheduledTaskFilter:
         assert names == [r"\Microsoft\Windows\Defrag\ScheduledDefrag"]
 
     def test_malformed_row_skipped(self, monkeypatch):
-        short = ["PC", r"\Broken\Row", "only", "four"]
-        good = ["PC", r"\Ok", "n", "s", "m", "l", "0", "a",
-                "p.exe", ".", "c", "Habilitada"]
+        # Fast query (E2.3): the CSV carries 4 columns, so a row with
+        # fewer than 4 fields is the malformed case (it used to be <12
+        # when the verbose query fed the table).
+        short = ["PC", r"\Broken\Row", "only"]
+        good = ["PC", r"\Ok", "n", "s"]
         fake = _CmdResult(stdout=_schtasks_csv([HEADER, short, good]))
         monkeypatch.setattr(tasks, "run_system_cmd", lambda *_a, **_k: fake)
 
@@ -340,7 +342,9 @@ class TestKillProcessFailClosed:
 
     def test_normal_process_killed(self, monkeypatch):
         seen = {}
-        monkeypatch.setattr(processes, "_name_for", lambda pid: "")
+        # Lote F1 (S6): the kill now re-verifies the LIVE name, so the
+        # fake resolver must report the same process the caller named.
+        monkeypatch.setattr(processes, "_name_for", lambda pid: "notepad.exe")
 
         def fake_run(cmd, **k):
             seen["cmd"] = cmd

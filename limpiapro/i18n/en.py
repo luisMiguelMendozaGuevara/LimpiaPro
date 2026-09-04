@@ -253,6 +253,11 @@ STRINGS = {
     "log.task_error": "Task error {name}: {msg}",
     "msg.task_error": "Could not modify:\n{msg}\n\n(administrator required)",
     "startup.tasks_count": "{n} active - {m} disabled",
+    "startup.src.user_run": "User (HKCU Run)",
+    "startup.src.user_runonce": "User (HKCU RunOnce)",
+    "startup.src.system_run": "System (HKLM Run)",
+    "startup.src.system_runonce": "System (HKLM RunOnce)",
+    "startup.src.user_disabled": "User (disabled)",
     "log.tasks_loaded": "Scheduled tasks: {n} loaded.",
     "msg.select_process": "Select a process in the list.",
     "msg.kill_process": ("End the process:\n\n  {name} (PID {pid}) ?\n\n"
@@ -325,6 +330,13 @@ STRINGS = {
     "msg.no_uninstall_cmd": "This application has no uninstall command.",
     "msg.run_uninstaller": ("Run the uninstaller of:\n\n  {name}\n\n{cmd}"
                             "\n\nFollow the program's instructions."),
+    "msg.uninstall_temp_refused": ("Uninstaller refused: its executable "
+                                   "lives in a TEMP folder, a classic "
+                                   "uninstall-registry abuse pattern."),
+    "msg.uninstall_user_warn": ("\n\nWARNING: this uninstaller lives inside "
+                                "your user profile (any program could have "
+                                "modified it) and will run WITH admin "
+                                "rights."),
     "log.uninstaller_launched": "Uninstaller launched: {name}",
     "status.uninstaller_launched": "Uninstaller launched: {name}",
     "log.uninstaller_error": "Could not launch the uninstaller of {name}: {msg}",
@@ -348,6 +360,7 @@ STRINGS = {
     "btn.analyze": "Analyze",
     "btn.clean_updates": "Clean updates",
     "update.not_available": "not available",
+    "update.not_measured": "Not analyzed",
     "log.winsxs_error": "Error measuring WinSxS: {exc}",
     "update.winsxs_size": "WinSxS store: {size}",
     "update.section": ">> {label}",

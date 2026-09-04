@@ -59,10 +59,57 @@ except ImportError:  # pragma: no cover - backend is a pinned dependency
 from .paths import get_logs_dir
 from .safety import SafetyGuard, is_safe_delete_target
 
+# ---------------------------------------------------------------------------
+# Junction detection (Lote E1.1: os.path.isjunction is Python 3.12+)
+# ---------------------------------------------------------------------------
+# The project supports Python 3.10/3.11 (pyproject requires-python), where
+# os.path.isjunction() does not exist. Every junction check in the codebase
+# MUST go through this single abstraction; the Windows fallback reads the
+# reparse tag with a non-following stat, which is exactly what the native
+# implementation does (and what keeps broken junctions detectable).
+
+_IO_REPARSE_TAG_MOUNT_POINT = 0xA000_0003
+
+
+def _isjunction_reparse(path: str) -> bool:
+    """Python 3.10/3.11 Windows fallback for os.path.isjunction().
+
+    Reads the reparse tag from a non-following stat, exactly what the
+    native 3.12+ implementation does, so broken junctions (deleted
+    target) are still detected: the reparse point itself stats fine.
+    SECURITY: this is NOT an islink() substitute — a junction is not a
+    symlink; walk/delete call sites check both and must never descend
+    into either.
+    """
+    try:
+        st = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    return getattr(st, "st_reparse_tag", 0) == _IO_REPARSE_TAG_MOUNT_POINT
+
+
+if hasattr(os.path, "isjunction"):  # Python >= 3.12: native, exact.
+    def is_junction(path: str) -> bool:
+        """True when `path` is a junction (native os.path.isjunction, 3.12+).
+
+        Kept as a thin wrapper so call sites never reference
+        os.path.isjunction directly: on 3.10/3.11 that attribute does not
+        exist and every delete/scan path would crash with AttributeError.
+        """
+        return os.path.isjunction(path)
+elif sys.platform == "win32":
+    is_junction = _isjunction_reparse
+else:
+    def is_junction(path: str) -> bool:
+        """POSIX filesystems have no junctions: always False.
+
+        Symlinks keep their own os.path.islink() checks at every call
+        site, so the never-descend guarantee is unchanged."""
+        return False
+
 # Progress reporting intervals: how many files between notifications.
 # Tuned to balance UI responsiveness with performance overhead.
 PROGRESS_STATS = 500      # For fast folder stats (scandir-based scans)
-PROGRESS_RULES = 100      # For winapp2 rule scanning
 PROGRESS_DELETE = 20      # For deletion operations
 DEFAULT_WORKERS = 4       # Default thread pool size for parallel operations
 
@@ -446,11 +493,9 @@ def _iter_tree_files(folder: str, should_cancel=None, recurse: bool = True):
                 continue
             try:
                 if entry.is_dir(follow_symlinks=False):
-                    if os.path.isjunction(entry.path) or not recurse:
+                    if is_junction(entry.path) or not recurse:
                         continue
-                    sub = os.scandir(entry.path)
-                    if sub is not None:
-                        stack.append(sub)
+                    stack.append(os.scandir(entry.path))
                 elif entry.is_file(follow_symlinks=False):
                     yield entry
             except OSError:
@@ -566,13 +611,13 @@ def _delete_path(path: str, to_recycle: bool = False) -> bool:
         - Read-only files: Made writable before deletion attempt.
     """
     if not is_safe_delete_target(
-            path, is_dir=os.path.isdir(path) or os.path.isjunction(path)):
+            path, is_dir=os.path.isdir(path) or is_junction(path)):
         return False
     if to_recycle:
         return recycle_path(path)
     try:
         if os.path.isdir(path):
-            if os.path.islink(path) or os.path.isjunction(path):
+            if os.path.islink(path) or is_junction(path):
                 _remove_link(path)
             else:
                 shutil.rmtree(path, ignore_errors=True)
@@ -789,14 +834,14 @@ def _delete_measured(path: str,
           A failed recycle leaves the path untouched (fail-safe) and is
           reported as an error instead of being retried destructively.
     """
-    is_dir = os.path.isdir(path) or os.path.isjunction(path)
+    is_dir = os.path.isdir(path) or is_junction(path)
     if not is_safe_delete_target(path, is_dir=is_dir):
         return False, 0, [_make_error(path, "safety", None,
                                       kind="safety",
                                       message="refused by delete safety policy")]
     if to_recycle:
         return _recycle_measured(path, is_dir)
-    if not is_dir or os.path.islink(path) or os.path.isjunction(path):
+    if not is_dir or os.path.islink(path) or is_junction(path):
         # Regular file or a top-level symlink/junction (never followed).
         size = 0
         errors: list[DeleteError] = []
@@ -806,7 +851,7 @@ def _delete_measured(path: str,
             errors.append(_make_error(path, "stat", e))
         try:
             if os.path.isdir(path):
-                if os.path.islink(path) or os.path.isjunction(path):
+                if os.path.islink(path) or is_junction(path):
                     _remove_link(path)
                 else:
                     shutil.rmtree(path, ignore_errors=True)
@@ -817,7 +862,7 @@ def _delete_measured(path: str,
             _make_writable(path)
             try:
                 if os.path.isdir(path):
-                    if os.path.islink(path) or os.path.isjunction(path):
+                    if os.path.islink(path) or is_junction(path):
                         _remove_link(path)
                     else:
                         shutil.rmtree(path, ignore_errors=True)
@@ -877,16 +922,14 @@ def _delete_measured(path: str,
             continue
         try:
             if entry.is_dir(follow_symlinks=False):
-                if os.path.islink(entry.path) or os.path.isjunction(entry.path):
+                if os.path.islink(entry.path) or is_junction(entry.path):
                     # Junction/symlink: remove the link, never its target.
                     try:
                         _remove_link(entry.path)
                     except OSError as e:
                         errors.append(_make_error(entry.path, "rmtree", e))
                     continue
-                sub = os.scandir(entry.path)
-                if sub is not None:
-                    stack.append((entry.path, sub))
+                stack.append((entry.path, os.scandir(entry.path)))
             else:
                 _remove_file(entry)
         except OSError as e:
@@ -962,6 +1005,21 @@ def redact_user_paths(text: str) -> str:
     # Literal %USERPROFILE% reference (never expanded upstream).
     out = re.sub(r"%userprofile%(?=$|[\\/])", "~", out,
                  flags=re.IGNORECASE)
+    # Lote F1 (S5): sibling profiles under the same users-root must not
+    # leak either — an audit line mentioning another profile
+    # (C:\Users\Ana while the session user is C:\Users\Ana2) used to be
+    # written in plaintext. "<users-root>\<name>" prefixes become
+    # "~<name>"; the current home is already masked above, so this pass
+    # only touches OTHER profiles (plus Public/Default, which is fine).
+    # Restricted to roots literally named Users/home so that exotic
+    # layouts (home = /, /root, or a redirected folder) can never turn
+    # this into a blanket mask of the whole filesystem.
+    if home and home not in ("~", "/", ""):
+        users_root = os.path.dirname(home)
+        if os.path.basename(users_root).lower() in ("users", "home"):
+            out = re.sub(
+                re.escape(users_root) + r"[\\/]+([^\\/]+)", r"~\1", out,
+                flags=re.IGNORECASE)
     return out
 
 
