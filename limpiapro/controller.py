@@ -287,7 +287,7 @@ class LimpiaProController(QObject):
     clean_cancelled = Signal()
 
     # winapp2 events
-    winapp_loaded = Signal(int)
+    winapp_loaded = Signal(object)
     winapp_error = Signal(str)
 
     # generic
