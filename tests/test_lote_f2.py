@@ -12,16 +12,27 @@ REPO = Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------- P3
 
 
+def _reference_blake2b(path, block=duplicates.BLOCK_SIZE):
+    """Portable reference digest: a plain chunked loop (works on 3.10+,
+    where hashlib.file_digest does not exist yet)."""
+    h = hashlib.blake2b(digest_size=16)
+    with open(path, "rb") as fh:
+        while True:
+            chunk = fh.read(block)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def test_full_hash_matches_manual_chunk_loop(tmp_path, monkeypatch):
-    """file_digest (3.11+) and the manual BLOCK_SIZE loop must produce
-    byte-identical BLAKE2b digests."""
+    """The production hasher (hashlib.file_digest on 3.11+, chunked loop on
+    3.10) must match the reference chunked loop byte for byte."""
     data = b"x" * (duplicates.BLOCK_SIZE * 2 + 123)
     f = tmp_path / "blob.bin"
     f.write_bytes(data)
 
-    with open(f, "rb") as fh:
-        expected = hashlib.file_digest(
-            fh, lambda: hashlib.blake2b(digest_size=16)).hexdigest()
+    expected = _reference_blake2b(str(f))
 
     assert duplicates.DuplicateScanner._hasher(str(f), full=True) == expected
 
@@ -36,8 +47,8 @@ def test_prehash_only_reads_first_bytes(tmp_path, monkeypatch):
     f.write_bytes(data)
 
     expected = hashlib.blake2b(
-        data[:duplicates.DuplicateScanner.PREHASH_SIZE],
-        digest_size=16).hexdigest()
+        data[: duplicates.DuplicateScanner.PREHASH_SIZE], digest_size=16
+    ).hexdigest()
 
     assert duplicates.DuplicateScanner._hasher(str(f), full=False) == expected
     monkeypatch.setattr(duplicates, "_file_digest", None)
@@ -71,9 +82,7 @@ def test_startup_page_renders_before_icons():
     """Source guard: the rows must fill BEFORE the icon queue starts
     (the old code blocked the UI thread on shell-icon extraction), and
     the cache must exist so repeated refreshes skip extraction."""
-    src = (REPO / "limpiapro" / "ui" / "pages" / "startup_page.py"
-           ).read_text(encoding="utf-8")
-    done = src.split("def _startup_done", 1)[1].split(
-        "def _extract_next_icon", 1)[0]
+    src = (REPO / "limpiapro" / "ui" / "pages" / "startup_page.py").read_text(encoding="utf-8")
+    done = src.split("def _startup_done", 1)[1].split("def _extract_next_icon", 1)[0]
     assert done.index("fill_tree") < done.index("QTimer.singleShot")
     assert "_icon_cache" in src and "_extract_next_icon" in src
