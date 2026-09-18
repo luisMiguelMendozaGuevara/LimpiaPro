@@ -105,6 +105,7 @@ def get_cache_file() -> str:
              
     Notes:
         - Format: JSON with schema versioning (see CacheService in services/).
-        - Used by app.py (CleanerApp) and controller.py (LimpiaProController).
+        - Used by controller.py (LimpiaProController) to locate the analysis
+          cache consumed by the incremental startup (Lote B1).
     """
     return os.path.join(get_user_data_dir(), "limpiador_cache.json")

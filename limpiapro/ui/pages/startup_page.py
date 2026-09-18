@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QFileInfo
+from PySide6.QtCore import QFileInfo, Qt, QTimer
 from PySide6.QtWidgets import (
     QDialog,
     QFileIconProvider,
@@ -40,7 +40,7 @@ from ... import APP_NAME
 from ...i18n import t
 from ...processes import get_processes, is_protected, kill_process
 from ...startup import get_disabled_startup, get_startup_apps, is_runonce_entry, set_startup
-from ...tasks import get_scheduled_tasks, set_task_enabled
+from ...tasks import get_scheduled_tasks, get_task_states, set_task_enabled
 from .. import icons
 from ..dialogs import app_confirm, app_info
 from ..theme import GREEN_TEXT, ORANGE
@@ -65,6 +65,23 @@ def _command_exe(command: str) -> str:
     if cmd.startswith('"'):
         return cmd.split('"')[1]
     return cmd.split()[0]
+
+
+_SOURCE_KEYS = {
+    # O4 (Lote F3): the core returns stable English source tags; the UI
+    # translates them. Unknown tags fall through untranslated.
+    "User (HKCU Run)": "startup.src.user_run",
+    "User (HKCU RunOnce)": "startup.src.user_runonce",
+    "System (HKLM Run)": "startup.src.system_run",
+    "System (HKLM RunOnce)": "startup.src.system_runonce",
+    "User (disabled)": "startup.src.user_disabled",
+}
+
+
+def _source_label(source: str) -> str:
+    """Translate a stable core source tag for display (O4, Lote F3)."""
+    key = _SOURCE_KEYS.get(source)
+    return t(key) if key else source
 
 
 class StartupPage(QWidget):
@@ -150,6 +167,9 @@ class StartupPage(QWidget):
         )
         lay.addWidget(self.startup_tree, 1)
         self.startup_data = []
+        # P4 (Lote F2): shell-icon extraction cache, keyed by exe path.
+        self._icon_cache = {}
+        self._icon_queue = []
         return tab
 
     def refresh_startup(self) -> None:
@@ -166,21 +186,45 @@ class StartupPage(QWidget):
         return (get_startup_apps(),)
 
     def _startup_done(self, data) -> None:
-        """Handle startup data load completion."""
+        """Handle startup data load completion.
+
+        Rows paint IMMEDIATELY; icons come afterwards (P4, Lote F2):
+        shell-icon extraction costs ~10-50 ms per entry cold and used to
+        block the UI thread before the table even appeared. Extraction
+        runs one entry per event-loop tick after the render and is
+        cached per exe path, so later refreshes are instant."""
         self.host.set_busy(False)
         self.startup_data = data
-        specs = []
-        for i, e in enumerate(data):
-            exe = _command_exe(e["command"])
-            icon = None
-            if exe and os.path.exists(exe):
-                icon = _ICON_PROVIDER.icon(QFileInfo(exe))
-            kw = {"index": i}
-            if icon is not None:
-                kw["icon"] = icon
-            specs.append((e["name"], (e["source"], e["command"]), kw))
+        specs = [
+            (e["name"], (_source_label(e["source"]), e["command"]),
+             {"index": i})
+            for i, e in enumerate(data)
+        ]
         fill_tree(self.startup_tree, specs)
         self.host.log(t("log.startup_loaded", n=len(self.startup_data)))
+        self._icon_queue = list(data)
+        QTimer.singleShot(0, self._extract_next_icon)
+
+    def _extract_next_icon(self) -> None:
+        """Attach icons one entry per event-loop tick (P4, Lote F2)."""
+        if not self._icon_queue:
+            return
+        entry = self._icon_queue.pop(0)
+        exe = _command_exe(entry["command"])
+        if exe:
+            icon = self._icon_cache.get(exe)
+            if icon is None and exe not in self._icon_cache:
+                if os.path.exists(exe):
+                    icon = _ICON_PROVIDER.icon(QFileInfo(exe))
+                self._icon_cache[exe] = icon
+            if icon is not None:
+                index = next((i for i, d in enumerate(self.startup_data)
+                              if d is entry), None)
+                if index is not None:
+                    item = self.startup_tree.topLevelItem(index)
+                    if item is not None:
+                        item.setIcon(0, icon)
+        QTimer.singleShot(0, self._extract_next_icon)
 
     def disable_startup_selected(self) -> None:
         """Disable the selected startup entry."""
@@ -332,6 +376,9 @@ class StartupPage(QWidget):
         )
         lay.addWidget(self.tasks_tree, 1)
         self.tasks_data = []
+        # E2.3: sequence token for the async disabled-state merge (a stale
+        # verbose result from an older refresh must not touch newer data).
+        self._tasks_seq = 0
         return tab
 
     def refresh_tasks(self) -> None:
@@ -349,10 +396,35 @@ class StartupPage(QWidget):
     def _refresh_tasks_done(self, tasks) -> None:
         self.host.set_busy(False)
         self.tasks_data = tasks
+        self._tasks_seq += 1
+        self._render_tasks()
+        self.host.log(t("log.tasks_loaded", n=len(tasks)))
+        # E2.3: the exact disabled state only exists in the verbose query
+        # (3-15 s); the table is already rendered, so refine it in the
+        # background instead of making the user wait for it.
+        run_async(self, self._states_worker, self._states_done,
+                  (self._tasks_seq,),
+                  on_error=lambda exc: self._generic_error(
+                      t("area.tasks"), exc))
+
+    def _states_worker(self, seq):
+        return seq, get_task_states()
+
+    def _states_done(self, result) -> None:
+        seq, states = result
+        if seq != self._tasks_seq or not states:
+            return
+        for task in self.tasks_data:
+            state = states.get(task.get("name", ""))
+            if state:
+                task["scheduled"] = state
+        self._render_tasks()
+
+    def _render_tasks(self) -> None:
         enabled = 0
         disabled = 0
         specs = []
-        for i, task in enumerate(tasks):
+        for i, task in enumerate(self.tasks_data):
             state = task.get("scheduled") or task.get("status", "")
             is_disabled = "disabled" in state.lower()
             if is_disabled:
@@ -364,10 +436,17 @@ class StartupPage(QWidget):
                  (state, task.get("status", ""), task.get("next", "")),
                  {"index": i,
                   "fg": ORANGE if is_disabled else GREEN_TEXT}))
+        # Preserve the user's selection across re-renders (row order is
+        # stable: only the scheduled field changes between passes).
+        current = self.tasks_tree.currentItem()
+        current_index = current.data(0, Qt.UserRole) if current else None
         fill_tree(self.tasks_tree, specs)
+        if isinstance(current_index, int) and 0 <= current_index < len(specs):
+            it = self.tasks_tree.topLevelItem(current_index)
+            if it is not None:
+                self.tasks_tree.setCurrentItem(it)
         self.tasks_info.setText(
             t("startup.tasks_count", n=enabled, m=disabled))
-        self.host.log(t("log.tasks_loaded", n=len(tasks)))
 
     def _toggle_task(self, enable: bool) -> None:
         """Enable or disable the selected scheduled task."""
@@ -432,10 +511,9 @@ class StartupPage(QWidget):
             self,
             [
                 ("#0", t("col.process"), 260),
-                ("pid", "PID", 70, "center"),
-                ("session", t("col.session"), 80, "center"),
-                ("mem", t("col.memory"), 90, "e"),
-                ("user", t("col.user"), 160),
+                ("pid", "PID", 90, "center"),
+                ("session", t("col.session"), 100, "center"),
+                ("mem", t("col.memory"), 110, "e"),
             ],
         )
         lay.addWidget(self.proc_tree, 1)
@@ -465,8 +543,10 @@ class StartupPage(QWidget):
             if search and search not in p["name"].lower():
                 continue
             count += 1
+            # NOTE: no "user" column anymore - tasklist runs without /v
+            # (several seconds faster, cannot hang on a hung process).
             specs.append((p["name"],
-                          (p["pid"], p["session"], p["mem"], p["user"]),
+                          (p["pid"], p["session"], p["mem"]),
                           {"index": i}))
         fill_tree(self.proc_tree, specs)
         self.host.log(t("log.processes_shown", n=count))

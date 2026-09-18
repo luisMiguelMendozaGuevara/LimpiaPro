@@ -37,24 +37,86 @@ import errno
 import glob as globmod
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
+# Recycle-bin backend (send2trash): optional at import time so exotic
+# environments can still import utils; recycle_path reports a clear error
+# when the backend is missing instead of crashing the app.
+try:
+    from send2trash import send2trash as _send2trash
+except ImportError:  # pragma: no cover - backend is a pinned dependency
+    _send2trash = None
+
 from .paths import get_logs_dir
 from .safety import SafetyGuard, is_safe_delete_target
+
+# ---------------------------------------------------------------------------
+# Junction detection (Lote E1.1: os.path.isjunction is Python 3.12+)
+# ---------------------------------------------------------------------------
+# The project supports Python 3.10/3.11 (pyproject requires-python), where
+# os.path.isjunction() does not exist. Every junction check in the codebase
+# MUST go through this single abstraction; the Windows fallback reads the
+# reparse tag with a non-following stat, which is exactly what the native
+# implementation does (and what keeps broken junctions detectable).
+
+_IO_REPARSE_TAG_MOUNT_POINT = 0xA000_0003
+
+
+def _isjunction_reparse(path: str) -> bool:
+    """Python 3.10/3.11 Windows fallback for os.path.isjunction().
+
+    Reads the reparse tag from a non-following stat, exactly what the
+    native 3.12+ implementation does, so broken junctions (deleted
+    target) are still detected: the reparse point itself stats fine.
+    SECURITY: this is NOT an islink() substitute — a junction is not a
+    symlink; walk/delete call sites check both and must never descend
+    into either.
+    """
+    try:
+        st = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    return getattr(st, "st_reparse_tag", 0) == _IO_REPARSE_TAG_MOUNT_POINT
+
+
+if hasattr(os.path, "isjunction"):  # Python >= 3.12: native, exact.
+    def is_junction(path: str) -> bool:
+        """True when `path` is a junction (native os.path.isjunction, 3.12+).
+
+        Kept as a thin wrapper so call sites never reference
+        os.path.isjunction directly: on 3.10/3.11 that attribute does not
+        exist and every delete/scan path would crash with AttributeError.
+        """
+        return os.path.isjunction(path)
+elif sys.platform == "win32":
+    is_junction = _isjunction_reparse
+else:
+    def is_junction(path: str) -> bool:
+        """POSIX filesystems have no junctions: always False.
+
+        Symlinks keep their own os.path.islink() checks at every call
+        site, so the never-descend guarantee is unchanged."""
+        return False
 
 # Progress reporting intervals: how many files between notifications.
 # Tuned to balance UI responsiveness with performance overhead.
 PROGRESS_STATS = 500      # For fast folder stats (scandir-based scans)
-PROGRESS_RULES = 100      # For winapp2 rule scanning
 PROGRESS_DELETE = 20      # For deletion operations
 DEFAULT_WORKERS = 4       # Default thread pool size for parallel operations
+
+# Log-hygiene limits: the error log must never grow unbounded, and free-text
+# written to logs must never carry the user's home path in plaintext.
+_ERRLOG_MAX_BYTES = 2 * 1024 * 1024  # rotate limpiapro_error.log at 2 MB
+_LOG_BACKUPS = 2                     # kept generations (.1 / .2)
 
 
 # Windows error codes (winerror) used to classify deletion failures.
@@ -413,28 +475,39 @@ def _iter_tree_files(folder: str, should_cancel=None, recurse: bool = True):
         stack.append(os.scandir(folder))
     except OSError:
         return
-    while stack:
-        if should_cancel and should_cancel():
-            return
-        try:
-            entry = next(stack[-1])
-        except StopIteration:
-            stack.pop().close()
-            continue
-        except OSError:
-            stack.pop().close()
-            continue
-        try:
-            if entry.is_dir(follow_symlinks=False):
-                if os.path.isjunction(entry.path) or not recurse:
-                    continue
-                sub = os.scandir(entry.path)
-                if sub is not None:
-                    stack.append(sub)
-            elif entry.is_file(follow_symlinks=False):
-                yield entry
-        except OSError:
-            continue
+    try:
+        while stack:
+            if should_cancel and should_cancel():
+                # Open iterators are closed by the finally block below:
+                # on Windows, an open directory handle blocks later
+                # deletion/rename of that folder (P0 fix: cancellation
+                # used to leak every still-open scandir handle until GC).
+                return
+            try:
+                entry = next(stack[-1])
+            except StopIteration:
+                stack.pop().close()
+                continue
+            except OSError:
+                stack.pop().close()
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if is_junction(entry.path) or not recurse:
+                        continue
+                    stack.append(os.scandir(entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    yield entry
+            except OSError:
+                continue
+    finally:
+        # Close any scandir iterator left open on this path: early return
+        # (cancellation) or generator abandonment (GeneratorExit from a
+        # consumer breaking out mid-walk). Exhausted iterators were already
+        # popped+closed above, so this only touches live ones.
+        for _it in stack:
+            _it.close()
+        stack.clear()
 
 
 def iter_file_sizes(folder: str, should_cancel=None) -> Generator[tuple[str, int], None, None]:
@@ -511,7 +584,7 @@ def _folder_size(folder: str) -> int:
     return _fast_folder_stats(folder)[0]
 
 
-def _delete_path(path: str) -> bool:
+def _delete_path(path: str, to_recycle: bool = False) -> bool:
     """Delete a file or a whole folder tree.
     
     Returns True when the path is gone afterwards (rmtree runs with
@@ -523,9 +596,13 @@ def _delete_path(path: str) -> bool:
     
     Args:
         path (str): Absolute path to the file or folder to delete.
-        
+        to_recycle (bool, optional): When True the target is moved to the
+            recycle bin (send2trash) instead of being deleted. A failed
+            recycle leaves the path untouched (fail-safe).
+            
     Returns:
-        bool: True if the path was successfully deleted, False otherwise.
+        bool: True if the path was successfully deleted (or recycled),
+              False otherwise.
         
     Notes:
         - Safety check: Calls is_safe_delete_target() before any deletion.
@@ -534,11 +611,13 @@ def _delete_path(path: str) -> bool:
         - Read-only files: Made writable before deletion attempt.
     """
     if not is_safe_delete_target(
-            path, is_dir=os.path.isdir(path) or os.path.isjunction(path)):
+            path, is_dir=os.path.isdir(path) or is_junction(path)):
         return False
+    if to_recycle:
+        return recycle_path(path)
     try:
         if os.path.isdir(path):
-            if os.path.islink(path) or os.path.isjunction(path):
+            if os.path.islink(path) or is_junction(path):
                 _remove_link(path)
             else:
                 shutil.rmtree(path, ignore_errors=True)
@@ -547,6 +626,34 @@ def _delete_path(path: str) -> bool:
         return not os.path.exists(path)
     except OSError:
         return False
+
+
+def recycle_path(path: str) -> bool:
+    """Move `path` to the recycle bin (send2trash). Returns True when gone.
+    
+    The safety gate is NOT re-checked here by design: callers already
+    passed it (_delete_path / _delete_measured), and moving to the bin is
+    strictly more reversible than deleting. Failures (bin disabled,
+    unsupported volume) leave the path untouched and return False.
+    
+    Args:
+        path (str): Absolute path to move to the recycle bin.
+        
+    Returns:
+        bool: True if the path is no longer at its original location.
+    """
+    if _send2trash is None:
+        return False
+    try:
+        _send2trash(path)
+    except OSError:
+        return False
+    except Exception:
+        # send2trash raises OSError subclasses on Windows, but its
+        # platform backends may surface other errors for exotic paths;
+        # a failed recycle must never escalate to the worker thread.
+        return False
+    return not os.path.exists(path)
 
 
 def _make_writable(path: str) -> None:
@@ -627,7 +734,62 @@ def _remove_link(path: str) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
-def _delete_measured(path: str) -> tuple[bool, int, list[DeleteError]]:
+def humanize_duration(seconds: float) -> str:
+    """Format a duration for status bars ("5 min", "2 h", "<1 min").
+
+    Used for the cache-age indicator; kept in utils (next to
+    format_size) so it stays importable without Qt.
+
+    Args:
+        seconds (float): Duration in seconds (negative values clamp to 0).
+
+    Returns:
+        str: Compact human-readable duration.
+    """
+    seconds = max(int(seconds), 0)
+    if seconds < 60:
+        return "<1 min"
+    if seconds < 3600:
+        return f"{seconds // 60} min"
+    return f"{seconds // 3600} h"
+
+
+def _recycle_measured(path: str, is_dir: bool) -> tuple[bool, int, list[DeleteError]]:
+    """Measure `path` and move it whole to the recycle bin.
+
+    Recycle mode measures BEFORE moving (the bin move is atomic per
+    target, so no single-pass walk is possible). A failed move leaves
+    the path untouched and reports one structured error; it is never
+    retried with a destructive fallback.
+
+    Args:
+        path (str): Absolute path (already accepted by the safety gate).
+        is_dir (bool): True when the target is a directory.
+
+    Returns:
+        tuple[bool, int, list[DeleteError]]: same contract as
+            _delete_measured.
+    """
+    size = 0
+    try:
+        size = (_fast_folder_stats(path)[0] if is_dir
+                else os.path.getsize(path))
+    except OSError as e:
+        # Unknown size must not block a recycle: proceed with 0.
+        size = 0
+        if not os.path.lexists(path):
+            return False, 0, [_make_error(path, "stat", e)]
+    if recycle_path(path):
+        return True, size, []
+    message = ("send2trash backend not available" if _send2trash is None
+               else "move to recycle bin failed (target left untouched)")
+    return False, size, [_make_error(path, "recycle", None,
+                                     kind="recycle",
+                                     message=message)]
+
+
+def _delete_measured(path: str,
+                     to_recycle: bool = False) -> tuple[bool, int, list[DeleteError]]:
     """Delete a file or a whole folder tree in ONE traversal, returning
     (gone, freed_bytes, errors).
     
@@ -637,6 +799,10 @@ def _delete_measured(path: str) -> tuple[bool, int, list[DeleteError]]:
     
     Args:
         path (str): Absolute path to the file or folder to delete.
+        to_recycle (bool, optional): Move to the recycle bin instead of
+            deleting. The target is measured first and then moved whole
+            (send2trash); the extra stat pass only applies in recycle
+            mode, which is opt-in.
         
     Returns:
         tuple[bool, int, list[DeleteError]]: 
@@ -663,13 +829,19 @@ def _delete_measured(path: str) -> tuple[bool, int, list[DeleteError]]:
           without following their targets.
         - Read-only handling: Files are made writable with _make_writable()
           before retrying deletion after an access-denied error.
+        - Recycle mode (to_recycle=True): a guarded target is still refused;
+          an accepted target is measured and then moved whole to the bin.
+          A failed recycle leaves the path untouched (fail-safe) and is
+          reported as an error instead of being retried destructively.
     """
-    is_dir = os.path.isdir(path) or os.path.isjunction(path)
+    is_dir = os.path.isdir(path) or is_junction(path)
     if not is_safe_delete_target(path, is_dir=is_dir):
         return False, 0, [_make_error(path, "safety", None,
                                       kind="safety",
                                       message="refused by delete safety policy")]
-    if not is_dir or os.path.islink(path) or os.path.isjunction(path):
+    if to_recycle:
+        return _recycle_measured(path, is_dir)
+    if not is_dir or os.path.islink(path) or is_junction(path):
         # Regular file or a top-level symlink/junction (never followed).
         size = 0
         errors: list[DeleteError] = []
@@ -679,7 +851,7 @@ def _delete_measured(path: str) -> tuple[bool, int, list[DeleteError]]:
             errors.append(_make_error(path, "stat", e))
         try:
             if os.path.isdir(path):
-                if os.path.islink(path) or os.path.isjunction(path):
+                if os.path.islink(path) or is_junction(path):
                     _remove_link(path)
                 else:
                     shutil.rmtree(path, ignore_errors=True)
@@ -690,7 +862,7 @@ def _delete_measured(path: str) -> tuple[bool, int, list[DeleteError]]:
             _make_writable(path)
             try:
                 if os.path.isdir(path):
-                    if os.path.islink(path) or os.path.isjunction(path):
+                    if os.path.islink(path) or is_junction(path):
                         _remove_link(path)
                     else:
                         shutil.rmtree(path, ignore_errors=True)
@@ -750,16 +922,14 @@ def _delete_measured(path: str) -> tuple[bool, int, list[DeleteError]]:
             continue
         try:
             if entry.is_dir(follow_symlinks=False):
-                if os.path.islink(entry.path) or os.path.isjunction(entry.path):
+                if os.path.islink(entry.path) or is_junction(entry.path):
                     # Junction/symlink: remove the link, never its target.
                     try:
                         _remove_link(entry.path)
                     except OSError as e:
                         errors.append(_make_error(entry.path, "rmtree", e))
                     continue
-                sub = os.scandir(entry.path)
-                if sub is not None:
-                    stack.append((entry.path, sub))
+                stack.append((entry.path, os.scandir(entry.path)))
             else:
                 _remove_file(entry)
         except OSError as e:
@@ -789,6 +959,116 @@ def _safe_size(path: str) -> int:
         return 0
 
 
+def redact_user_paths(text: str) -> str:
+    """Mask the user home directory in free text destined for log files.
+
+    Log hygiene requirement: ``audit.jsonl`` and ``limpiapro_error.log``
+    live in %LOCALAPPDATA% and describe what the user cleaned. Writing
+    absolute profiles paths (C:\\Users\\Ana\\...) would persist browsing
+    activity and app usage in plaintext. Every log write funnels through
+    this helper, replacing the home prefix with ``~``.
+
+    Matching details:
+        - Case-insensitive (Windows paths arrive in any casing).
+        - Covers ``expanduser("~")``, %USERPROFILE%, %HOME% *values* and
+          the literal ``%USERPROFILE%`` token when env expansion never
+          happened upstream.
+        - A trailing boundary (end of string or a path separator) is
+          required, so "/home/z" does NOT mangle "/home/zoe".
+
+    Args:
+        text (str): Free text that may contain user paths (may be empty).
+
+    Returns:
+        str: Text with every recognized home prefix replaced by "~";
+             unchanged input when there is nothing to mask.
+    """
+    if not text:
+        return text
+    try:
+        home = os.path.expanduser("~")
+    except Exception:
+        home = ""
+    needles: list[str] = []
+    if home and home not in ("~", "/", ""):
+        needles.append(home)
+    for var in ("USERPROFILE", "HOME"):
+        val = os.environ.get(var)
+        if val and val not in ("~", "/", ""):
+            needles.append(val)
+    out = text
+    for needle in needles:
+        # (?=$|[\/]) — end-of-string or separator boundary so shorter
+        # sibling homes sharing a prefix are left untouched.
+        out = re.sub(re.escape(needle) + r"(?=$|[\\/])", "~", out,
+                     flags=re.IGNORECASE)
+    # Literal %USERPROFILE% reference (never expanded upstream).
+    out = re.sub(r"%userprofile%(?=$|[\\/])", "~", out,
+                 flags=re.IGNORECASE)
+    # Lote F1 (S5): sibling profiles under the same users-root must not
+    # leak either — an audit line mentioning another profile
+    # (C:\Users\Ana while the session user is C:\Users\Ana2) used to be
+    # written in plaintext. "<users-root>\<name>" prefixes become
+    # "~<name>"; the current home is already masked above, so this pass
+    # only touches OTHER profiles (plus Public/Default, which is fine).
+    # Restricted to roots literally named Users/home so that exotic
+    # layouts (home = /, /root, or a redirected folder) can never turn
+    # this into a blanket mask of the whole filesystem.
+    if home and home not in ("~", "/", ""):
+        users_root = os.path.dirname(home)
+        if os.path.basename(users_root).lower() in ("users", "home"):
+            out = re.sub(
+                re.escape(users_root) + r"[\\/]+([^\\/]+)", r"~\1", out,
+                flags=re.IGNORECASE)
+    return out
+
+
+def _rotate_log_file(path: str, max_bytes: int, backups: int = 2) -> None:
+    """Shift `path` -> path.1 -> ... -> path.<backups> once it reaches size.
+
+    Keeps developer/user-facing logs bounded without pulling in the
+    logging framework: when `path` is >= `max_bytes` bytes, generation
+    N moves to N+1 (the oldest is overwritten) and the live file becomes
+    generation 1.
+
+    Thread model: callers writing concurrently MUST serialize around this
+    helper plus the append (both AuditLogger and _errlog hold such a
+    lock, Lote D4). Losing a rotation race to another
+    process is harmless — os.replace fails, the line lands in the
+    un-rotated file and the next writer retries.
+
+    Args:
+        path (str): Absolute path of the live log file.
+        max_bytes (int): Size threshold in bytes that triggers rotation.
+        backups (int, optional): Number of archived generations kept.
+                                 Defaults to _LOG_BACKUPS (2). Minimum 1.
+
+    Notes:
+        - Never raises: any OSError (missing file, permission race) is
+          swallowed; logging must not take down the operation being logged.
+        - os.replace is atomic on Windows and POSIX, so readers parsing the
+          JSONL never see half-written archives.
+    """
+    try:
+        if not path or os.path.getsize(path) < max_bytes:
+            return
+        for i in range(max(1, backups) - 1, 0, -1):
+            src = f"{path}.{i}"
+            if os.path.exists(src):
+                with contextlib.suppress(OSError):
+                    os.replace(src, f"{path}.{i + 1}")
+        with contextlib.suppress(OSError):
+            os.replace(path, f"{path}.1")
+    except OSError:
+        pass
+
+
+# Serialization for _errlog writes: rotation + append must be atomic
+# against concurrent worker threads, or lines interleave/corrupt right
+# when the error log matters most (Lote D4).
+_ERRLOG_LOCK = threading.Lock()
+
+
 def _errlog(msg: str, level: str = "error", component: str = "") -> None:
     """Append a JSONL record to the error log (the app has no console:
     failures must leave a trace). Developer-facing, English.
@@ -807,6 +1087,11 @@ def _errlog(msg: str, level: str = "error", component: str = "") -> None:
     Notes:
         - Log location: %LOCALAPPDATA%/LimpiaPro/logs/limpiapro_error.log
         - Format: JSON Lines (one JSON object per line) for easy parsing.
+        - Privacy: msg is passed through redact_user_paths() BEFORE the
+          record is serialized (not after!) — JSON escaping turns path
+          separators into \\\\ and would defeat substring masking.
+        - Rotation: rotated at _ERRLOG_MAX_BYTES keeping _LOG_BACKUPS
+          generations, so the log family can never exceed ~6 MB.
         - Error resilience: If logging itself fails, the error is silently
           ignored to prevent cascading failures.
         - Component detection: Uses sys._getframe(1) to auto-detect the caller's
@@ -821,12 +1106,14 @@ def _errlog(msg: str, level: str = "error", component: str = "") -> None:
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "level": level,
         "component": component,
-        "msg": str(msg),
+        "msg": redact_user_paths(str(msg)),
     }, ensure_ascii=False)
+    logfile = os.path.join(get_logs_dir(), "limpiapro_error.log")
     try:
-        with open(os.path.join(get_logs_dir(), "limpiapro_error.log"),
-                  "a", encoding="utf-8") as f:
-            f.write(record + "\n")
+        with _ERRLOG_LOCK:  # Lote D4: rotation+append serialized
+            _rotate_log_file(logfile, _ERRLOG_MAX_BYTES, _LOG_BACKUPS)
+            with open(logfile, "a", encoding="utf-8") as f:
+                f.write(record + "\n")
     except Exception:
         pass  # nosec B110 - error logging must never itself fail
 

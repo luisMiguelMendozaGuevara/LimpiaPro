@@ -53,7 +53,16 @@ jobs:
   test:
     runs-on: windows-latest
     needs: lint
-steps:
+    strategy:
+      # One red Python version must not hide the results of the others.
+      fail-fast: false
+      matrix:
+        # requires-python promises >=3.10, so 3.10/3.11 MUST be exercised:
+        # before Lote E1.1 (is_junction shim) they would crash on import of
+        # the delete/scan core (os.path.isjunction is 3.12+). The full pin
+        # set supports 3.10-3.14 (PySide6 6.11.2 classifiers).
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
       # Actions are pinned by full commit SHA (Lote D1): a mutable tag
       # (@v4) lets a compromised upstream repo run code in CI. Bump =
       # update SHA + version comment together.
@@ -61,7 +70,7 @@ steps:
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
@@ -107,7 +116,7 @@ steps:
             Write-Error "Executable not generated"
             exit 1
           }
-          Write-Host "ԣ� Executable built successfully"
+          Write-Host "✓ Executable built successfully"
           Get-Item "dist/LimpiaPro.exe" | Select-Object Name, Length, LastWriteTime
 
       - name: Smoke test executable

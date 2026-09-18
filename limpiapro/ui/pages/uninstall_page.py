@@ -30,12 +30,13 @@ from PySide6.QtWidgets import (
 from ... import APP_NAME
 from ...i18n import t
 from ...uninstall import (
-    delete_registry_path,
+    delete_leftover_items,
     find_leftovers,
     get_installed_apps,
     launch_uninstaller,
+    uninstall_risk,
 )
-from ...utils import _delete_path, format_size
+from ...utils import format_size
 from .. import icons
 from ..dialogs import app_confirm, app_info, readonly_toplevel
 from ..tree_helpers import fill_tree, make_tree, selected_one
@@ -166,9 +167,21 @@ class UninstallPage(QWidget):
         if not app["uninstall"]:
             app_info(self, "warning", APP_NAME, t("msg.no_uninstall_cmd"))
             return
+        # Lote F1 (S1): the app runs elevated, so a tampered HKCU
+        # UninstallString would execute attacker-chosen code as admin.
+        # Refuse temp-dir executables outright and warn explicitly when
+        # the executable lives inside the (user-writable) profile.
+        risk = uninstall_risk(app["uninstall"])
+        if risk == "temp":
+            app_info(self, "critical", APP_NAME,
+                     t("msg.uninstall_temp_refused"))
+            return
+        message = t("msg.run_uninstaller", name=app["name"],
+                    cmd=app["uninstall"])
+        if risk == "user":
+            message += t("msg.uninstall_user_warn")
         if not app_confirm(self, "warning", APP_NAME,
-                           t("msg.run_uninstaller", name=app["name"],
-                             cmd=app["uninstall"]),
+                           message,
                            yes_text=t("btn.uninstall_yes")):
             return
         # No shell=True: the command is split, the executable is verified
@@ -253,16 +266,20 @@ class UninstallPage(QWidget):
                   self._delete_leftovers_done, on_error=self._leftover_error)
 
     def _delete_leftovers_worker(self):
-        ok = 0
-        err = 0
-        for kind, p in self.leftovers:
-            deleted = delete_registry_path(p) if kind == "registry" \
-                else _delete_path(p)
-            if deleted:
-                ok += 1
-            else:
-                err += 1
-        return ok, err
+        """Delete leftovers via the audit-logged core service (Lote D6).
+
+        delete_leftover_items() dispatches registry keys to
+        delete_registry_path() and files to the central delete-safety
+        gate, recording failures + a summary in audit.jsonl.
+        Returns (ok, err) exactly as before.
+        """
+        return delete_leftover_items(self.leftovers,
+                                     to_recycle=self._recycle_enabled())
+
+    def _recycle_enabled(self) -> bool:
+        """True when the user opted for recycle-bin instead of delete."""
+        return bool(getattr(self.host.settings,
+                            "delete_to_recycle_bin", False))
 
     def _delete_leftovers_done(self, ok, err) -> None:
         self.host.set_busy(False)

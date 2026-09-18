@@ -36,9 +36,9 @@ from PySide6.QtWidgets import (
 )
 
 from ... import APP_NAME
-from ...duplicates import DuplicateScanner
+from ...duplicates import DuplicateScanner, delete_duplicates
 from ...i18n import t
-from ...utils import _delete_path, _safe_size, format_size
+from ...utils import _safe_size, format_size
 from .. import icons
 from ..dialogs import app_confirm, app_info
 from ..empty_state import EmptyState
@@ -257,35 +257,21 @@ class DuplicatePage(QWidget):
                   (paths, snapshot))
 
     def _delete_worker(self, paths, snapshot):
-        """Delete the given paths, re-validating each one against the scan
-        snapshot (size + mtime). Returns (removed, errors, changed).
+        """Delete the given paths via the audit-logged core service.
 
-        SAFETY: This worker re-checks the file's size and modification time
-        against the snapshot taken during the scan. If the file has been
-        modified since the scan, it is skipped to prevent accidental
-        deletion of user data.
+        SAFETY: delete_duplicates() (Lote D6) re-checks each file's size
+        and modification time against the snapshot taken during the scan.
+        If the file has been modified since the scan, it is skipped to
+        prevent accidental deletion of user data. Returns
+        (removed, errors, changed) exactly as before.
         """
-        removed = 0
-        errors = 0
-        changed = 0
-        for p in paths:
-            if not os.path.exists(p):
-                continue
-            snap = snapshot.get(p)
-            if snap is not None:
-                try:
-                    st = os.stat(p)
-                    if (st.st_size, st.st_mtime_ns) != snap:
-                        changed += 1
-                        continue
-                except OSError:
-                    changed += 1
-                    continue
-            if _delete_path(p):
-                removed += 1
-            else:
-                errors += 1
-        return removed, errors, changed
+        return delete_duplicates(paths, snapshot,
+                                 to_recycle=self._recycle_enabled())
+
+    def _recycle_enabled(self) -> bool:
+        """True when the user opted for recycle-bin instead of delete."""
+        return bool(getattr(self.host.settings,
+                            "delete_to_recycle_bin", False))
 
     def _delete_done(self, removed, errors, changed) -> None:
         """Handle deletion completion."""
@@ -297,8 +283,12 @@ class DuplicatePage(QWidget):
         # Remove the deleted items from the tree.
         for i in range(self.tree.topLevelItemCount() - 1, -1, -1):
             parent = self.tree.topLevelItem(i)
+            if parent is None:
+                continue
             for j in range(parent.childCount() - 1, -1, -1):
                 child = parent.child(j)
+                if child is None:
+                    continue
                 p = item_data(child)
                 if isinstance(p, str) and not os.path.exists(p):
                     parent.removeChild(child)

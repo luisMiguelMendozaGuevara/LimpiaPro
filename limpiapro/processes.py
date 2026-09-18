@@ -67,28 +67,42 @@ def get_processes():
     One batched tasklist query feeds the whole list; parse failures and
     command errors are logged and yield [].
 
+    PERF: `/v` was dropped deliberately. Verbose mode makes tasklist
+    query window titles, session users and CPU times for EVERY process,
+    which can take several seconds (and effectively hang when a hung
+    process never answers the title query). The plain listing answers
+    quickly and still carries everything the UI table shows.
+
+    Header rows are skipped language-independently: the PID column of a
+    data row is always numeric, a localized header row's is not.
+
     Returns:
         list[dict]: A list of dictionaries, each representing a running process.
-                    Keys: name, pid, session, mem, user, title.
+                    Keys: name, pid, session, mem, user (always "" since /v
+                    was dropped), title (always "").
     """
     procs = []
     try:
-        # /v = verbose (includes user, title, etc.)
-        # /fo CSV = CSV output format
-        result = run_system_cmd(["tasklist", "/fo", "CSV", "/v"])
+        # /fo CSV = CSV output format (5 columns without /v: name, pid,
+        # session, session number, memory).
+        result = run_system_cmd(["tasklist", "/fo", "CSV"])
         for row in csv.reader(io.StringIO(result.stdout)):
-            if len(row) < 6:
+            if len(row) < 5:
                 continue
             # Pad the row with empty strings to ensure we can unpack safely.
-            # tasklist /v typically returns 9 columns.
-            name, pid, session, _snum, mem, _status, user, _cpu, title = (row + [""] * 9)[:9]
+            name, pid, session, _snum, mem = (row + [""] * 5)[:5]
+            pid = pid.strip()
+            # Language-independent junk/header filter: only data rows
+            # carry a numeric PID (repeated localized headers do not).
+            if not pid.isdigit():
+                continue
             procs.append({
                 "name": name.strip(),
-                "pid": pid.strip(),
+                "pid": pid,
                 "session": session.strip(),
                 "mem": mem.strip(),
-                "user": user.strip(),
-                "title": title.strip(),
+                "user": "",
+                "title": "",
             })
     except Exception as e:
         _errlog(f"tasklist failed: {e!r}")
@@ -102,6 +116,11 @@ def kill_process(pid, name=None):
     resolved from the process list when not supplied, so the guard also
     works for callers that only have a pid.
 
+    FAIL-CLOSED: when the process identity cannot be resolved (empty name,
+    e.g. transient process or tasklist failure), the kill is REFUSED.
+    is_protected("") is always False, so allowing an unresolved target
+    would silently bypass the safety gate for an admin-privileged taskkill.
+
     Args:
         pid: The process ID to kill.
         name: Optional process name. If not provided, it will be resolved
@@ -110,16 +129,33 @@ def kill_process(pid, name=None):
     Returns:
         tuple: (success: bool, message: str).
                Returns (False, "protected: <name>") if the process is
-               on the protected list.
+               on the protected list, and (False, "unresolved: ...") when
+               its name could not be resolved for verification.
     """
     name = (name or "").strip()
     if not name:
         name = _name_for(pid)
-        
+
     # SAFETY GATE: Check against the protected list BEFORE invoking taskkill.
     if is_protected(name):
         return False, f"protected: {name}"
-        
+    if not name:
+        # Fail-closed: an unverifiable PID must never be force-killed by an
+        # elevated process. A PID could have been reused between listing
+        # and this call; refusing is the safe outcome.
+        return False, "unresolved: could not verify process name; refusing to kill"
+
+    # Lote F1 (S6) — TOCTOU re-verification: the identity check above may
+    # run seconds after the list snapshot (or use a caller-supplied name).
+    # If the PID was recycled in between, taskkill /F would hit a
+    # DIFFERENT process. Re-resolve the live name right before the kill
+    # and require a match (extension/case-insensitive).
+    live = _name_for(pid)
+    stem = lambda s: s.lower().removesuffix(".exe")  # noqa: E731
+    if not live or stem(live) != stem(name):
+        return False, (f"unresolved: pid {pid} now resolves to "
+                       f"{live or 'nothing'}; refusing to kill")
+
     try:
         # /F = force termination
         # /PID = specify process by ID

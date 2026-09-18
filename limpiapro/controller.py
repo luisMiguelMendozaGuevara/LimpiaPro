@@ -34,8 +34,23 @@ from . import APP_VERSION
 from .categories import build_categories
 from .paths import get_cache_file
 from .recycle import empty_recycle_bin, recycle_bin_size
-from .services import CacheService, CleanupService
+from .services import CacheService
+from .utils import _errlog
 from .winapp2 import invalidate_detect_cache, parse_winapp_rules
+
+# ---------------------------------------------------------------------------
+# Module constants / small helpers
+# ---------------------------------------------------------------------------
+
+# Cache payload tag: single source of truth (was hardcoded "win32" at the
+# AnalysisWorker call site, Lote D3).
+PLATFORM_NAME = "win32"
+
+
+def _cache_payload(categories: Iterable) -> dict[str, dict[str, int]]:
+    """Build the {key: {size, files}} snapshot persisted to the scan cache."""
+    return {c.key: {"size": c.size, "files": c.files} for c in categories}
+
 
 # ---------------------------------------------------------------------------
 # Typed result models (simple data, no logic).
@@ -111,9 +126,8 @@ class AnalysisWorker(QObject):
                              should_cancel=self._should_cancel)
                 self.category_done.emit(cat.key)
             if self._cache_service is not None:
-                data = {c.key: {"size": c.size, "files": c.files}
-                        for c in self._categories}
-                self._cache_service.save(data, self._platform_name)
+                self._cache_service.save(
+                    _cache_payload(self._categories), self._platform_name)
             self.finished.emit()
         except Exception as e:  # never let a worker die silently
             self.failed.emit(str(e))
@@ -154,20 +168,36 @@ class CleanWorker(QObject):
     share of the pre-clean total. Results are not re-scanned afterwards:
     CleanCategory.clean() already updated the category sizes with the
     freed bytes, so get_results() is accurate without a new analysis
-    (Fase 6/7)."""
+    (Fase 6/7).
+
+    When to_recycle is True every target is moved to the recycle bin
+    instead of being deleted permanently (user opt-in from settings)."""
 
     progress = Signal(float)
     log = Signal(str)
     finished = Signal(object)   # CleanSummary
     cancelled = Signal()
+    failed = Signal(str)
 
     def __init__(self, categories: Iterable, should_cancel: Callable[[], bool],
+                 to_recycle: bool = False,
                  parent: QObject | None = None):
         super().__init__(parent)
         self._categories = list(categories)
         self._should_cancel = should_cancel
+        self._to_recycle = to_recycle
 
     def run(self) -> None:
+        # Lote D2: the clean is the most destructive operation; an
+        # unexpected exception must still release the UI (failed is wired
+        # to operation_error/_release_busy and terminates the thread),
+        # never leave it stuck on "busy" forever.
+        try:
+            self._run_cleaning()
+        except Exception as e:  # never let a worker die silently
+            self.failed.emit(str(e))
+
+    def _run_cleaning(self) -> None:
         selected = self._categories
         target_all = sum(c.size for c in selected)
         cumulative = 0
@@ -195,6 +225,7 @@ class CleanWorker(QObject):
                 cat.list_files()
             r, e, f = cat.clean(
                 target_bytes=cat.size,
+                to_recycle=self._to_recycle,
                 on_progress=(lambda frac, cum=cumulative, tot=target_all:
                              self.progress.emit(
                                  cum / tot + frac * (tot - cum) / tot)
@@ -264,13 +295,23 @@ class LimpiaProController(QObject):
     busy_changed = Signal(bool)
 
     def __init__(self, categories=None, cache_service=None,
-                 parent: QObject | None = None):
+                 parent: QObject | None = None,
+                 defer_winapp: bool = False):
+        """Initialize the controller.
+
+        Args:
+            categories: Optional category list (tests inject tiny ones).
+            cache_service: Optional cache service override.
+            parent: Optional Qt parent.
+            defer_winapp: Build the winapp category WITHOUT parsing the
+                bundled ini (the UI defers that heavy parse to a worker
+                after the first paint via load_winapp_rules, E2.1).
+        """
         super().__init__(parent)
         self.categories = list(categories) if categories is not None \
-            else build_categories()
+            else build_categories(load_winapp=not defer_winapp)
         self.cache_service = cache_service or CacheService(
             get_cache_file(), 1, APP_VERSION)
-        self.cleanup_service = CleanupService()
         self._cancel_requested = False
         self._busy = False
         self._thread: QThread | None = None
@@ -301,7 +342,7 @@ class LimpiaProController(QObject):
         self.analysis_started.emit()
         worker = AnalysisWorker(
             self.categories, self._should_cancel,
-            cache_service=self.cache_service, platform_name="win32")
+            cache_service=self.cache_service, platform_name=PLATFORM_NAME)
         worker.progress.connect(self.analysis_progress)
         worker.category_done.connect(self.category_updated)
         worker.finished.connect(self.analysis_finished)
@@ -327,11 +368,18 @@ class LimpiaProController(QObject):
         worker.failed.connect(self._release_busy)
         self._start_worker(worker, worker.done, worker.failed)
 
-    def clean(self, keys: Iterable[str]) -> None:
+    def clean(self, keys: Iterable[str],
+              to_recycle: bool = False) -> None:
         """Delete the selected categories on a worker thread.
 
         Every path still passes through SafetyGuard inside the core right
-        before deletion; this controller never decides safety."""
+        before deletion; this controller never decides safety.
+
+        Args:
+            keys: The category keys to clean.
+            to_recycle: Move targets to the recycle bin instead of
+                        deleting them (user opt-in from settings).
+        """
         if self._busy:
             return
         selected = [c for c in self.categories if c.key in set(keys)]
@@ -341,14 +389,24 @@ class LimpiaProController(QObject):
         self._cancel_requested = False
         self._set_busy(True)
         self.clean_started.emit()
-        worker = CleanWorker(selected, self._should_cancel)
+        worker = CleanWorker(selected, self._should_cancel,
+                             to_recycle=to_recycle)
         worker.progress.connect(self.clean_progress)
         worker.log.connect(self.clean_log)
+        # Save the cache FIRST: CleanCategory.clean() already updated the
+        # in-memory sizes with the freed bytes, so persisting them keeps
+        # the next startup's incremental analysis consistent (Lote D3).
+        worker.finished.connect(self._save_results_cache)
         worker.finished.connect(self.clean_finished)
         worker.finished.connect(self._release_busy)
         worker.cancelled.connect(self.clean_cancelled)
         worker.cancelled.connect(self._release_busy)
-        self._start_worker(worker, worker.finished, worker.cancelled)
+        # Lote D2: a crashed clean must surface the error and release the
+        # busy state (same contract as the other workers).
+        worker.failed.connect(self.operation_error)
+        worker.failed.connect(self._release_busy)
+        self._start_worker(worker, worker.finished, worker.cancelled,
+                           worker.failed)
 
     def cancel(self) -> None:
         """Ask the running operation to stop as soon as possible
@@ -398,6 +456,20 @@ class LimpiaProController(QObject):
     def _release_busy(self, *args) -> None:
         self._cancel_requested = False
         self._set_busy(False)
+
+    def _save_results_cache(self, *_args) -> None:
+        """Persist current sizes/files into the scan cache (Lote D3).
+
+        CleanCategory.clean() updates each category's size with the freed
+        bytes, so saving right after a clean replaces the stale pre-clean
+        snapshot AnalysisWorker wrote: the next startup must not present
+        pre-clean sizes as "cached" results. save() is best-effort by
+        design; anything non-OSError that still escapes only logs."""
+        try:
+            self.cache_service.save(_cache_payload(self.categories),
+                                    PLATFORM_NAME)
+        except Exception as e:
+            _errlog(f"post-clean cache save failed: {e!r}")
 
     def _start_worker(self, worker: QObject,
                       *terminal: object) -> None:

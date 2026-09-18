@@ -31,31 +31,39 @@ _RUN_PAIRS = [
     (winreg.HKEY_CURRENT_USER,
      r"Software\Microsoft\Windows\CurrentVersion\Run",
      r"Software\Microsoft\Windows\CurrentVersion\RunDisabled",
-     "Usuario (HKCU Run)"),
+     "User (HKCU Run)"),
     (winreg.HKEY_CURRENT_USER,
      r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
      r"Software\Microsoft\Windows\CurrentVersion\RunOnceDisabled",
-     "Usuario (HKCU RunOnce)"),
+     "User (HKCU RunOnce)"),
     (winreg.HKEY_LOCAL_MACHINE,
      r"Software\Microsoft\Windows\CurrentVersion\Run",
      r"Software\Microsoft\Windows\CurrentVersion\RunDisabled",
-     "Sistema (HKLM Run)"),
+     "System (HKLM Run)"),
     (winreg.HKEY_LOCAL_MACHINE,
      r"Software\Microsoft\Windows\CurrentVersion\RunOnce",
      r"Software\Microsoft\Windows\CurrentVersion\RunOnceDisabled",
-     "Sistema (HKLM RunOnce)"),
+     "System (HKLM RunOnce)"),
 ]
 
 # Active keys (for listing startup apps).
 RUN_KEYS = [(h, a, src) for h, a, _d, src in _RUN_PAIRS]
 
 # Disabled keys (for the "re-enable" list).
-RUN_KEYS_DISABLED = [(h, d, "Usuario (desactivadas)") for h, _a, d, _s in _RUN_PAIRS]
+RUN_KEYS_DISABLED = [(h, d, "User (disabled)") for h, _a, d, _s in _RUN_PAIRS]
 
 # Map: (hive, active key) -> (hive, disabled key).
 # This lookup table allows quick resolution of the disabled counterpart
 # for any given active key.
 RUN_KEY_TO_DISABLED = {(h, a): (h, d) for h, a, d, _s in _RUN_PAIRS}
+
+# Map: (hive, disabled key) -> (hive, active key). Needed by set_startup
+# when re-enabling: get_disabled_startup() reports entries with the
+# DISABLED key's coordinates, so restoring them requires resolving the
+# active counterpart (P0 fix: without this map the code fell back to
+# "same coords", turning the restore into a self-move whose delete step
+# silently destroyed the entry).
+RUN_KEY_FROM_DISABLED = {(h, d): (h, a) for h, a, d, _s in _RUN_PAIRS}
 
 STARTUP_FOLDERS = [
     os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"),
@@ -92,7 +100,7 @@ def _read_reg_entries(hive, subkey):
 
 
 def _read_reg_value(hive, subkey, name):
-    """Read a single value without enumerating the whole key.
+    """Read a single value (data + type) without enumerating the whole key.
 
     Args:
         hive: The registry hive.
@@ -100,13 +108,16 @@ def _read_reg_value(hive, subkey, name):
         name: The name of the value to read.
 
     Returns:
-        The value data, or None if the value does not exist or an error occurs.
+        tuple: (value_data, value_type) as returned by winreg.QueryValueEx,
+               or None if the value does not exist or an error occurs.
+               The type is returned so moves between keys can preserve it
+               (e.g. REG_EXPAND_SZ must stay expandable after a disable/
+               enable roundtrip).
     """
     try:
         with winreg.OpenKey(hive, subkey) as key:
             try:
-                val, _ = winreg.QueryValueEx(key, name)
-                return val
+                return winreg.QueryValueEx(key, name)
             except OSError:
                 return None
     except OSError:
@@ -184,7 +195,8 @@ def get_disabled_startup():
     return entries
 
 
-def _reg_transfer(hive_src, subkey_src, hive_dst, subkey_dst, name, value):
+def _reg_transfer(hive_src, subkey_src, hive_dst, subkey_dst, name, value,
+                  value_type=None):
     """Move a registry value from one key to another, rolling back on
     failure.
 
@@ -194,17 +206,28 @@ def _reg_transfer(hive_src, subkey_src, hive_dst, subkey_dst, name, value):
     removed), so a failure can never leave the entry duplicated on both
     keys. Returns nothing; raises OSError on failure.
 
+    The value's registry type is preserved when supplied (P0 fix):
+    rewriting REG_EXPAND_SZ values as plain REG_SZ used to silently stop
+    environment-variable expansion after a disable + enable roundtrip,
+    leaving the program unable to start.
+
     Args:
         hive_src: Source registry hive.
         subkey_src: Source subkey path.
         hive_dst: Destination registry hive.
         subkey_dst: Destination subkey path.
         name: The name of the value to move.
-        value: The data to write to the destination.
+        value: The data to write to the destination (written verbatim;
+               no str() coercion, which corrupts binary/dword data).
+        value_type: The registry type to write (REG_EXPAND_SZ,
+                    REG_BINARY, ...). Falls back to REG_SZ when omitted
+                    (backwards-compatible default for legacy callers).
 
     Raises:
         OSError: If the transfer cannot be completed.
     """
+    if value_type is None:
+        value_type = winreg.REG_SZ
     prev = None
     prev_type = winreg.REG_SZ
     
@@ -212,7 +235,7 @@ def _reg_transfer(hive_src, subkey_src, hive_dst, subkey_dst, name, value):
     with winreg.CreateKey(hive_dst, subkey_dst) as kdst:
         with contextlib.suppress(OSError):
             prev, prev_type = winreg.QueryValueEx(kdst, name)
-        winreg.SetValueEx(kdst, name, 0, winreg.REG_SZ, str(value))
+        winreg.SetValueEx(kdst, name, 0, value_type, value)
         
     # Step 2: Delete from source.
     try:
@@ -271,19 +294,34 @@ def set_startup(entry, enable):
         if entry["type"] == "reg":
             hive, subkey = entry["hive"], entry["subkey"]
             if enable:
-                # Move from RunDisabled back to Run.
-                d_hive, d_subkey = RUN_KEY_TO_DISABLED.get((hive, subkey), (hive, subkey))
-                value = _read_reg_value(d_hive, d_subkey, entry["name"])
-                if value is None:
+                # Move from RunDisabled back to Run. The entry dict carries
+                # the DISABLED key's coords (see get_disabled_startup).
+                if (hive, subkey) in RUN_KEY_FROM_DISABLED:
+                    s_hive, s_subkey = hive, subkey
+                    a_hive, a_subkey = RUN_KEY_FROM_DISABLED[(hive, subkey)]
+                else:
+                    # Defensive fallback: entry already carrying ACTIVE
+                    # coords. Read where disabling put the value; refuse
+                    # unmapped pairs instead of moving a key onto itself
+                    # (that used to erase the value).
+                    a_hive, a_subkey = hive, subkey
+                    s_hive, s_subkey = RUN_KEY_TO_DISABLED.get(
+                        (hive, subkey), (None, None))
+                    if (s_hive, s_subkey) == (None, None):
+                        return False, "cannot resolve the disabled counterpart"
+                read = _read_reg_value(s_hive, s_subkey, entry["name"])
+                if read is None:
                     return False, "the disabled entry was not found"
-                _reg_transfer(d_hive, d_subkey, hive, subkey, entry["name"], value)
+                _reg_transfer(s_hive, s_subkey, a_hive, a_subkey,
+                              entry["name"], read[0], read[1])
             else:
                 # Move from Run to RunDisabled.
-                value = _read_reg_value(hive, subkey, entry["name"])
-                if value is None:
+                read = _read_reg_value(hive, subkey, entry["name"])
+                if read is None:
                     return False, "the entry no longer exists"
                 d_hive, d_subkey = RUN_KEY_TO_DISABLED.get((hive, subkey), (hive, subkey))
-                _reg_transfer(hive, subkey, d_hive, d_subkey, entry["name"], value)
+                _reg_transfer(hive, subkey, d_hive, d_subkey, entry["name"],
+                              read[0], read[1])
                 
             # Flag RunOnce entries so the UI can show a warning
             if is_runonce_entry(entry):

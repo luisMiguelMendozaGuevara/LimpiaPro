@@ -33,6 +33,7 @@ STRINGS = {
     "status.parsing_winapp": "Parseando reglas winapp2...",
     "status.analysis_done": "Analisis completado",
     "status.analyze_cancelled": "Analisis cancelado",
+    "status.cached": "Resultados en cache de hace {age} - usa Analizar para refrescar",
     "log.analyze_cancelled": "Analisis cancelado por el usuario.",
     "status.cleaning": "Limpiando...",
     "status.clean_done": "Limpieza completada - {size} liberados",
@@ -76,6 +77,9 @@ STRINGS = {
                                 "evitar errores."),
     "msg.clean_note_recycle": ("Atencion: la papelera de reciclaje se "
                                "vaciara de forma permanente."),
+    "msg.clean_note_to_recycle": ("Modo papelera: los elementos se moveran "
+                                  "a la papelera de reciclaje (el espacio "
+                                  "se libera al vaciarla)."),
     "msg.clean_note_admin": ("Aviso: estas ejecutando sin permisos de "
                              "administrador; algunas categorias del "
                              "sistema se omitiran."),
@@ -161,6 +165,7 @@ STRINGS = {
     "settings.group_behaviors": "Comportamiento",
     "settings.auto_analyze": "Analizar automaticamente al iniciar",
     "settings.confirm_clean": "Confirmar antes de limpiar",
+    "settings.recycle_bin": "Mover a la papelera en vez de borrar",
     "settings.group_paths": "Ubicaciones",
     "settings.cache": "Cache",
     "settings.logs": "Logs",
@@ -256,6 +261,11 @@ STRINGS = {
     "log.task_error": "Error en tarea {name}: {msg}",
     "msg.task_error": "No se pudo modificar:\n{msg}\n\n(requiere administrador)",
     "startup.tasks_count": "{n} activas - {m} desactivadas",
+    "startup.src.user_run": "Usuario (HKCU Run)",
+    "startup.src.user_runonce": "Usuario (HKCU RunOnce)",
+    "startup.src.system_run": "Sistema (HKLM Run)",
+    "startup.src.system_runonce": "Sistema (HKLM RunOnce)",
+    "startup.src.user_disabled": "Usuario (desactivadas)",
     "log.tasks_loaded": "Tareas programadas: {n} cargadas.",
     "msg.select_process": "Selecciona un proceso en la lista.",
     "msg.kill_process": ("Terminar el proceso:\n\n  {name} (PID {pid}) "
@@ -331,6 +341,13 @@ STRINGS = {
     "msg.run_uninstaller": ("Ejecutar el desinstalador de:\n\n  {name}"
                             "\n\n{cmd}\n\nSigue las instrucciones del "
                             "programa."),
+    "msg.uninstall_temp_refused": ("Desinstalador rechazado: su ejecutable "
+                                   "vive en una carpeta TEMP, patron tipico "
+                                   "de abuso del registro de desinstalacion."),
+    "msg.uninstall_user_warn": ("\n\nAVISO: este desinstalador vive dentro "
+                                "de tu perfil de usuario (cualquier programa "
+                                "podria haberlo modificado) y se ejecutara "
+                                "CON permisos de administrador."),
     "log.uninstaller_launched": "Desinstalador lanzado: {name}",
     "status.uninstaller_launched": "Desinstalador lanzado: {name}",
     "log.uninstaller_error": ("No se pudo lanzar el desinstalador de "
@@ -356,6 +373,7 @@ STRINGS = {
     "btn.analyze": "Analizar",
     "btn.clean_updates": "Limpiar actualizaciones",
     "update.not_available": "no disponible",
+    "update.not_measured": "No analizado",
     "log.winsxs_error": "Error midiendo WinSxS: {exc}",
     "update.winsxs_size": "Tienda WinSxS: {size}",
     "update.section": ">> {label}",

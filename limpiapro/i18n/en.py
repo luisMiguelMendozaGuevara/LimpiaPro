@@ -33,6 +33,7 @@ STRINGS = {
     "status.parsing_winapp": "Parsing winapp2 rules...",
     "status.analysis_done": "Analysis complete",
     "status.analyze_cancelled": "Analysis cancelled",
+    "status.cached": "Cached results from {age} ago - use Analyze to refresh",
     "log.analyze_cancelled": "Analysis cancelled by the user.",
     "status.cleaning": "Cleaning...",
     "status.clean_done": "Cleanup finished - {size} freed",
@@ -71,6 +72,9 @@ STRINGS = {
                                 "apps before cleaning to avoid errors."),
     "msg.clean_note_recycle": ("Attention: the recycle bin will be "
                                "emptied permanently."),
+    "msg.clean_note_to_recycle": ("Recycle-bin mode: items are moved to "
+                                  "the recycle bin (space is freed when "
+                                  "the bin is emptied)."),
     "msg.clean_note_admin": ("Notice: running without administrator "
                              "rights; some system categories will be "
                              "skipped."),
@@ -155,6 +159,7 @@ STRINGS = {
     "settings.group_behaviors": "Behavior",
     "settings.auto_analyze": "Analyze automatically on start",
     "settings.confirm_clean": "Confirm before cleaning",
+    "settings.recycle_bin": "Move to the recycle bin instead of deleting",
     "settings.group_paths": "Locations",
     "settings.cache": "Cache",
     "settings.logs": "Logs",
@@ -248,6 +253,11 @@ STRINGS = {
     "log.task_error": "Task error {name}: {msg}",
     "msg.task_error": "Could not modify:\n{msg}\n\n(administrator required)",
     "startup.tasks_count": "{n} active - {m} disabled",
+    "startup.src.user_run": "User (HKCU Run)",
+    "startup.src.user_runonce": "User (HKCU RunOnce)",
+    "startup.src.system_run": "System (HKLM Run)",
+    "startup.src.system_runonce": "System (HKLM RunOnce)",
+    "startup.src.user_disabled": "User (disabled)",
     "log.tasks_loaded": "Scheduled tasks: {n} loaded.",
     "msg.select_process": "Select a process in the list.",
     "msg.kill_process": ("End the process:\n\n  {name} (PID {pid}) ?\n\n"
@@ -320,6 +330,13 @@ STRINGS = {
     "msg.no_uninstall_cmd": "This application has no uninstall command.",
     "msg.run_uninstaller": ("Run the uninstaller of:\n\n  {name}\n\n{cmd}"
                             "\n\nFollow the program's instructions."),
+    "msg.uninstall_temp_refused": ("Uninstaller refused: its executable "
+                                   "lives in a TEMP folder, a classic "
+                                   "uninstall-registry abuse pattern."),
+    "msg.uninstall_user_warn": ("\n\nWARNING: this uninstaller lives inside "
+                                "your user profile (any program could have "
+                                "modified it) and will run WITH admin "
+                                "rights."),
     "log.uninstaller_launched": "Uninstaller launched: {name}",
     "status.uninstaller_launched": "Uninstaller launched: {name}",
     "log.uninstaller_error": "Could not launch the uninstaller of {name}: {msg}",
@@ -343,6 +360,7 @@ STRINGS = {
     "btn.analyze": "Analyze",
     "btn.clean_updates": "Clean updates",
     "update.not_available": "not available",
+    "update.not_measured": "Not analyzed",
     "log.winsxs_error": "Error measuring WinSxS: {exc}",
     "update.winsxs_size": "WinSxS store: {size}",
     "update.section": ">> {label}",

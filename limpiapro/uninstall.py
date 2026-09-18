@@ -36,6 +36,9 @@ import shlex
 import subprocess
 import winreg
 
+from .audit_log import audit
+from .utils import _delete_path, _errlog
+
 # System key names that are never proposed for deletion as "leftovers":
 # they are too generic and removing them would break Windows or other
 # applications.
@@ -195,7 +198,8 @@ def delete_registry_path(path):
     Notes:
         - Safety: Calls _registry_target_allowed() before any deletion.
         - Depth-first: Enumerates index 0 repeatedly (deletions shift indices).
-        - Error handling: Returns False on any exception (no partial deletions).
+        - Error handling: Returns False on any exception (no partial
+          deletions); the reason is logged via _errlog (Lote D4).
     """
     try:
         hive_name, sub = path.split("\\", 1)
@@ -216,8 +220,68 @@ def delete_registry_path(path):
 
         _rec(hive, sub)
         return True
-    except Exception:
+    except Exception as e:
+        # Lote D4: this was the only destructive operation whose failure
+        # was 100% opaque (the UI just counts "N errors"); the reason now
+        # reaches the error log for forensics.
+        _errlog(f"reg delete failed: {path!r}: {e!r}")
         return False
+
+
+def delete_leftover_items(items, to_recycle: bool = False):
+    """Delete found leftovers (registry keys and files) with audit logging.
+
+    Core service behind the uninstaller's leftovers page (Lote D6):
+    dispatches each (kind, path) item to delete_registry_path() or
+    _delete_path() and records the operation in the structured audit log
+    — per-file records ONLY for failures, plus one "summary" record with
+    the batch totals.
+
+    Args:
+        items (list[tuple[str, str]]): (kind, path) pairs as produced by
+            find_leftovers(); kind "registry" targets a registry key,
+            anything else is treated as a filesystem path.
+        to_recycle (bool, optional): Move filesystem targets to the
+            recycle bin instead of deleting them. Registry keys are not
+            affected by this flag. Defaults to False.
+
+    Returns:
+        tuple[int, int]: (ok, err) counts, as the page previously computed.
+
+    Notes:
+        - Safety: registry paths go through _registry_target_allowed();
+          filesystem paths through the central delete-safety gate.
+        - Audit: operation="uninstall", category="leftovers"; failures
+          carry the kind (registry/file) in details; the summary record
+          carries removed, errors and the mode (delete/recycle).
+        - Error resilience: audit failures never break the deletion.
+    """
+    ok = 0
+    err = 0
+    with audit.batched():
+        for kind, p in items:
+            deleted = delete_registry_path(p) if kind == "registry" \
+                else _delete_path(p, to_recycle=to_recycle)
+            if deleted:
+                ok += 1
+            else:
+                err += 1
+                audit.log_operation(
+                    operation="uninstall",
+                    category="leftovers",
+                    action="delete",
+                    path=p,
+                    result="failed",
+                    details={"kind": kind,
+                             "mode": "recycle" if to_recycle else "delete"})
+        audit.log_operation(
+            operation="uninstall",
+            category="leftovers",
+            action="summary",
+            result="success",
+            details={"removed": ok, "errors": err,
+                     "mode": "recycle" if to_recycle else "delete"})
+    return ok, err
 
 
 # --------------------------------------------------------------------------
@@ -304,6 +368,45 @@ def split_command(cmd):
     return [exe, *tokens[1:]], None
 
 
+def uninstall_risk(command: str) -> str:
+    """Classify where an UninstallString's executable lives (Lote F1/S1).
+
+    The whole app normally runs elevated, so a tampered HKCU
+    UninstallString would execute attacker-chosen code AS ADMIN.
+    split_command already verifies the executable exists; this adds a
+    location-based verdict for the confirmation flow:
+
+    Returns:
+        str: "temp"   - under a user-writable TEMP dir (refused outright:
+                        no legitimate uninstaller lives there and it is
+                        the classic registry-abuse pattern);
+             "user"   - inside the user profile (user-writable: every
+                        program can plant/replace it, so the UI confirms
+                        with an explicit warning);
+             "system" - anywhere else (Program Files, etc.).
+    """
+    argv, _err = split_command(command)
+    if argv is None:
+        return "system"  # split_command reports the parse error itself
+    exe = os.path.normcase(os.path.normpath(os.path.abspath(argv[0])))
+    for var in ("TEMP", "TMP"):
+        val = os.environ.get(var)
+        if not val:
+            continue
+        root = os.path.normcase(os.path.normpath(
+            os.path.abspath(os.path.expandvars(val))))
+        if exe == root or exe.startswith(root + os.sep):
+            return "temp"
+    try:
+        profile = os.path.normcase(os.path.normpath(
+            os.path.expanduser("~")))
+    except Exception:
+        profile = ""
+    if profile and (exe == profile or exe.startswith(profile + os.sep)):
+        return "user"
+    return "system"
+
+
 def launch_uninstaller(command):
     """Safely launch a registry UninstallString.
     
@@ -323,10 +426,15 @@ def launch_uninstaller(command):
         - Uses subprocess.Popen with shell=False and CREATE_NO_WINDOW flag.
         - The uninstaller runs asynchronously (returns immediately).
         - Error messages are stable English/ASCII for UI translation.
+        - Lote F1 (S1): an executable under a user-writable TEMP dir is
+          REFUSED — the app runs elevated, so a planted uninstaller there
+          would be arbitrary admin-code execution from HKCU data.
     """
     argv, err = split_command(command)
     if argv is None:
         return False, err
+    if uninstall_risk(command) == "temp":
+        return False, "refused: uninstaller executable lives in a temporary folder"
     try:
         subprocess.Popen(argv, shell=False,  # nosec B603 - arg list, no shell
                          creationflags=subprocess.CREATE_NO_WINDOW)

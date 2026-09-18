@@ -273,21 +273,3 @@ def readonly_toplevel(master, title, geometry, header=None):
     h.addWidget(close)
     lay.addLayout(h)
     return win, box
-
-
-def confirm_destructive(title, details, extra=""):
-    """Destructive-action confirmation dialog. Returns True/False.
-
-    Args:
-        title: Dialog title.
-        details: Main message text.
-        extra: Optional additional warning text.
-
-    Returns:
-        bool: True if the user clicked Yes, False otherwise.
-    """
-    msg = (f"{details}\n\n{extra}\n{t('ui.continue_q')}" if extra
-           else f"{details}\n\n{t('ui.continue_q')}")
-    return QMessageBox.question(
-        None, title or APP_NAME, msg,
-        QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes

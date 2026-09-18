@@ -132,13 +132,20 @@ class CleanPage(QWidget):
         self.preview_btn.clicked.connect(self.host.preview_clean)
         self.winapp_btn = QPushButton(t("btn.winapp_rules"))
         self.winapp_btn.clicked.connect(self.host.load_winapp_rules)
+        # Recoverable-cleanup toggle: cleanup moves to the recycle bin
+        # instead of deleting. State lives in Settings (host owns them);
+        # the checkbox only mirrors and forwards the change.
+        self.recycle_chk = QCheckBox(t("settings.recycle_bin"))
+        self.recycle_chk.setChecked(bool(getattr(
+            self.host.settings, "delete_to_recycle_bin", False)))
+        self.recycle_chk.toggled.connect(self.host._on_recycle_toggled)
         self.cancel_btn = QPushButton(t("btn.cancel"))
         self.cancel_btn.clicked.connect(self.host.request_cancel)
         self.clean_btn = QPushButton(t("btn.clean_selected"))
         self.clean_btn.setProperty("kind", "primary")
         self.clean_btn.clicked.connect(self.host.confirm_clean)
-        for b in (self.all_btn, self.preview_btn,
-                  self.winapp_btn, self.cancel_btn, self.clean_btn):
+        for b in (self.all_btn, self.preview_btn, self.winapp_btn,
+                  self.recycle_chk, self.cancel_btn, self.clean_btn):
             toolbar.addWidget(b)
         lay.addLayout(toolbar)
         self._apply_button_icons()
@@ -194,6 +201,8 @@ class CleanPage(QWidget):
         """(Re)build one row per category from host.categories."""
         while self._list_lay.count() > 1:
             item = self._list_lay.takeAt(0)
+            if item is None:
+                break
             w = item.widget()
             if w is not None:
                 w.deleteLater()
@@ -262,6 +271,7 @@ class CleanPage(QWidget):
         for b in (self.all_btn, self.preview_btn,
                   self.winapp_btn, self.clean_btn):
             b.setEnabled(not busy)
+        self.recycle_chk.setEnabled(not busy)
         self.cancel_btn.setEnabled(busy)
 
     def on_show(self) -> None:

@@ -71,12 +71,26 @@ def test_detect_language_env_override(monkeypatch):
     assert i18n.detect_language() in ("es", "en")
 
 
+class _FakeWinDLL:
+    """Stand-in for ctypes.windll (absent on POSIX) with a fake kernel32."""
+
+    def __init__(self, kernel32):
+        self.kernel32 = kernel32
+
+
+def _fake_windll(monkeypatch, kernel32):
+    # raising=False: ctypes.windll does not exist on POSIX, where the
+    # attribute must be CREATED for the tests to exercise the Win32 path.
+    monkeypatch.setattr(i18n.ctypes, "windll", _FakeWinDLL(kernel32),
+                        raising=False)
+
+
 def test_detect_language_spanish_langid(monkeypatch):
     class _Kernel32:
         def GetUserDefaultUILanguage(self):
             return 0x0C0A  # Spanish (Spain)
 
-    monkeypatch.setattr(i18n.ctypes.windll, "kernel32", _Kernel32())
+    _fake_windll(monkeypatch, _Kernel32())
     assert i18n.detect_language() == "es"
 
 
@@ -85,20 +99,65 @@ def test_detect_language_other_langid_maps_to_english(monkeypatch):
         def GetUserDefaultUILanguage(self):
             return 0x0409  # English (US)
 
-    monkeypatch.setattr(i18n.ctypes.windll, "kernel32", _Kernel32())
+    _fake_windll(monkeypatch, _Kernel32())
     assert i18n.detect_language() == "en"
 
 
-def test_detect_language_api_failure_falls_back_to_locale(monkeypatch):
+class _LocaleNameKernel32:
+    """GetUserDefaultUILanguage is broken; GetUserDefaultLocaleName works."""
+
+    def __init__(self, name):
+        self._name = name
+
+    def GetUserDefaultUILanguage(self):
+        raise OSError("no UI language")
+
+    def GetUserDefaultLocaleName(self, buf, size):
+        buf.value = self._name
+        return len(self._name)
+
+
+def test_detect_language_api_failure_falls_back_to_locale_name(monkeypatch):
+    monkeypatch.delenv("LIMPIAPRO_LANG", raising=False)
+    monkeypatch.setattr(i18n, "_WIN", True)
+    _fake_windll(monkeypatch, _LocaleNameKernel32("es_ES"))
+    assert i18n.detect_language() == "es"
+    _fake_windll(monkeypatch, _LocaleNameKernel32("fr_FR"))
+    assert i18n.detect_language() == "en"
+
+
+def test_detect_language_env_fallback_without_win32(monkeypatch):
+    # POSIX path of _system_locale_name: standard env vars, gettext order.
     class _Broken:
         def GetUserDefaultUILanguage(self):
-            raise OSError("no windows")
+            raise OSError("no UI language")
 
-    monkeypatch.setattr(i18n.ctypes.windll, "kernel32", _Broken())
     monkeypatch.delenv("LIMPIAPRO_LANG", raising=False)
-    monkeypatch.setattr(i18n._locale, "getdefaultlocale",
-                        lambda: ("es_ES", "cp1252"))
+    monkeypatch.delenv("LC_ALL", raising=False)
+    monkeypatch.delenv("LC_MESSAGES", raising=False)
+    monkeypatch.delenv("LANG", raising=False)
+    monkeypatch.setattr(i18n, "_WIN", False)
+    _fake_windll(monkeypatch, _Broken())
+
+    monkeypatch.setenv("LC_ALL", "es_ES.UTF-8")
     assert i18n.detect_language() == "es"
-    monkeypatch.setattr(i18n._locale, "getdefaultlocale",
-                        lambda: ("fr_FR", "cp1252"))
+    monkeypatch.setenv("LC_ALL", "C")
+    monkeypatch.setenv("LC_MESSAGES", "es_MX")
+    assert i18n.detect_language() == "es"
+    monkeypatch.delenv("LC_MESSAGES", raising=False)
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
     assert i18n.detect_language() == "en"
+    monkeypatch.delenv("LANG", raising=False)
+    assert i18n.detect_language() == "en"
+
+
+def test_system_locale_name_env_precedence(monkeypatch):
+    monkeypatch.setattr(i18n, "_WIN", False)
+    monkeypatch.setenv("LC_ALL", "es_ES")
+    monkeypatch.setenv("LC_MESSAGES", "de_DE")
+    monkeypatch.setenv("LANG", "fr_FR")
+    assert i18n._system_locale_name() == "es_ES"
+    monkeypatch.delenv("LC_ALL", raising=False)
+    assert i18n._system_locale_name() == "de_DE"
+    monkeypatch.delenv("LC_MESSAGES", raising=False)
+    assert i18n._system_locale_name() == "fr_FR"

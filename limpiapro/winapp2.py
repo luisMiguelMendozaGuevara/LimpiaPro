@@ -44,7 +44,6 @@ import re
 import winreg
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Optional
 
 from .utils import glob_like
 
@@ -139,7 +138,7 @@ class ExcludeKey:
                       if exact else None)
 
     @classmethod
-    def parse(cls, val: str) -> Optional["ExcludeKey"]:
+    def parse(cls, val: str) -> "ExcludeKey | None":
         """Parse an ExcludeKey value into an ExcludeKey instance.
         
         Handles the three supported variants: FILE|path, root|masks, and root\\*|masks.
@@ -149,7 +148,7 @@ class ExcludeKey:
             val (str): ExcludeKey value string (e.g., "FILE|C:\\path\\file.tmp").
             
         Returns:
-            Optional[ExcludeKey]: Parsed ExcludeKey instance, or None if invalid/REG.
+            ExcludeKey | None: Parsed ExcludeKey instance, or None if invalid/REG.
             
         Example:
             >>> ExcludeKey.parse("FILE|%APPDATA%\\App\\important.dat")

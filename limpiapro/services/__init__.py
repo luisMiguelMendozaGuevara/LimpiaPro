@@ -6,10 +6,8 @@ the controller.
 
 Exported Services:
     CacheService: Atomic JSON cache storage for scan results.
-    CleanupService: Synchronous orchestration of scans, previews, and cleans.
 """
 
 from .cache_service import CacheService
-from .cleanup_service import CleanupService
 
-__all__ = ["CacheService", "CleanupService"]
+__all__ = ["CacheService"]

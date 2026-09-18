@@ -10,12 +10,16 @@ from ..i18n import t
 from ..utils import format_size, is_admin
 
 
-def clean_confirmation(selected) -> tuple[str, str, list[tuple[str, str]],
-                                           list[str]]:
+def clean_confirmation(selected, to_recycle: bool = False) -> tuple[
+        str, str, list[tuple[str, str]], list[str]]:
     """Build the structured clean-confirmation dialog content.
 
     Args:
         selected: The checked category objects.
+        to_recycle: True when cleanup will move targets to the recycle
+            bin instead of deleting them; appends a note so the user
+            knows the mode. The default (False) keeps the historical
+            output byte-identical.
 
     Returns:
         (heading, subtitle, items, notes): the four inputs of
@@ -37,4 +41,6 @@ def clean_confirmation(selected) -> tuple[str, str, list[tuple[str, str]],
         notes.append(t("msg.clean_note_winapp"))
     if any(c.needs_admin for c in selected) and not is_admin():
         notes.append(t("msg.clean_note_admin"))
+    if to_recycle:
+        notes.append(t("msg.clean_note_to_recycle"))
     return heading, subtitle, items, notes
