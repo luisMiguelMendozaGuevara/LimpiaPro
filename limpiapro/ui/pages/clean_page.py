@@ -121,9 +121,11 @@ class CleanPage(QWidget):
         lay.addWidget(subtitle)
 
         # ------------------------------------------------------- toolbar
-        # FlowLayout: wraps to a second line on narrow windows instead of
-        # clipping the button text.
-        toolbar = FlowLayout(spacing=8)
+        # Two visual groups, the conventional desktop layout:
+        #   row 1: tools (wraps on narrow windows via FlowLayout)
+        #   row 2: primary actions, right-aligned (Cancelar / Limpiar)
+        # The recycle-bin preference moved to the Settings page.
+        tools = FlowLayout(spacing=8)
         # Single smart toggle: shows the action it will perform
         # ("Seleccionar todo" / "Deseleccionar todo").
         self.all_btn = QPushButton(t("btn.select_all"))
@@ -132,22 +134,24 @@ class CleanPage(QWidget):
         self.preview_btn.clicked.connect(self.host.preview_clean)
         self.winapp_btn = QPushButton(t("btn.winapp_rules"))
         self.winapp_btn.clicked.connect(self.host.load_winapp_rules)
-        # Recoverable-cleanup toggle: cleanup moves to the recycle bin
-        # instead of deleting. State lives in Settings (host owns them);
-        # the checkbox only mirrors and forwards the change.
-        self.recycle_chk = QCheckBox(t("settings.recycle_bin"))
-        self.recycle_chk.setChecked(bool(getattr(
-            self.host.settings, "delete_to_recycle_bin", False)))
-        self.recycle_chk.toggled.connect(self.host._on_recycle_toggled)
+        self.analyze_btn = QPushButton(t("btn.analyze"))
+        self.analyze_btn.clicked.connect(self.host.analyze_all)
+        for b in (self.all_btn, self.preview_btn, self.winapp_btn,
+                  self.analyze_btn):
+            tools.addWidget(b)
+        lay.addLayout(tools)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addStretch(1)
         self.cancel_btn = QPushButton(t("btn.cancel"))
         self.cancel_btn.clicked.connect(self.host.request_cancel)
         self.clean_btn = QPushButton(t("btn.clean_selected"))
         self.clean_btn.setProperty("kind", "primary")
         self.clean_btn.clicked.connect(self.host.confirm_clean)
-        for b in (self.all_btn, self.preview_btn, self.winapp_btn,
-                  self.recycle_chk, self.cancel_btn, self.clean_btn):
-            toolbar.addWidget(b)
-        lay.addLayout(toolbar)
+        actions.addWidget(self.cancel_btn)
+        actions.addWidget(self.clean_btn)
+        lay.addLayout(actions)
         self._apply_button_icons()
 
         # ------------------------------------------------------ card list
@@ -187,6 +191,7 @@ class CleanPage(QWidget):
         self._update_toggle_button()
         icons.apply(self.preview_btn, "preview")
         icons.apply(self.winapp_btn, "package")
+        icons.apply(self.analyze_btn, "refresh")
         icons.apply(self.cancel_btn, "cancel", role="error")
         icons.apply(self.clean_btn, "clean", role="on_accent")
 
@@ -260,6 +265,21 @@ class CleanPage(QWidget):
             row.set_result(cat)
         self.update_total()
 
+    def refresh_results(self) -> None:
+        """Re-read every row from the category objects.
+
+        Needed after the sizes are applied from the on-disk cache (the
+        instant-startup path never emits category_updated, so the rows kept
+        showing their placeholder text while the objects already had the
+        real sizes).
+        """
+        by_key = {c.key: c for c in self.host.categories}
+        for key, row in self.rows.items():
+            cat = by_key.get(key)
+            if cat is not None:
+                row.set_result(cat)
+        self.update_total()
+
     def update_after_scan(self, cat) -> None:
         """Alias used by the app after each category scan."""
         self.on_category_updated(cat.key)
@@ -269,9 +289,8 @@ class CleanPage(QWidget):
     def on_busy(self, busy: bool) -> None:
         """Disable everything except Cancel while an operation runs."""
         for b in (self.all_btn, self.preview_btn,
-                  self.winapp_btn, self.clean_btn):
+                  self.winapp_btn, self.analyze_btn, self.clean_btn):
             b.setEnabled(not busy)
-        self.recycle_chk.setEnabled(not busy)
         self.cancel_btn.setEnabled(busy)
 
     def on_show(self) -> None:

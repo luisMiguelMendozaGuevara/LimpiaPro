@@ -162,6 +162,7 @@ NAV_ICONS: dict[str, str] = {
     "update": "update",
     "uninstall": "uninstall",
     "log": "log",
+    "settings": "gear",
 }
 
 # Palette roles usable as icon colors.

@@ -155,6 +155,8 @@ STRINGS = {
     "settings.theme_system": "System",
     "settings.language": "Language",
     "settings.lang_auto": "Automatic",
+    "settings.lang_es": "Spanish",
+    "settings.lang_en": "English",
     "settings.lang_note": "The language change applies on restart.",
     "settings.group_behaviors": "Behavior",
     "settings.auto_analyze": "Analyze automatically on start",

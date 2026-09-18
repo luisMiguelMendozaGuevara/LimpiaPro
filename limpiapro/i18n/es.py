@@ -161,6 +161,8 @@ STRINGS = {
     "settings.theme_system": "Sistema",
     "settings.language": "Idioma",
     "settings.lang_auto": "Automatico",
+    "settings.lang_es": "Espanol",
+    "settings.lang_en": "Ingles",
     "settings.lang_note": "El cambio de idioma se aplica al reiniciar.",
     "settings.group_behaviors": "Comportamiento",
     "settings.auto_analyze": "Analizar automaticamente al iniciar",

@@ -47,10 +47,27 @@ from .winapp2 import invalidate_detect_cache, parse_winapp_rules
 # AnalysisWorker call site, Lote D3).
 PLATFORM_NAME = "win32"
 
+# Scan-cache schema. Bump whenever the cached payload semantics change so a
+# stale/poisoned file is discarded instead of shown.
+#   2: rule-based categories with no rules loaded are not persisted anymore
+#      (v2.9.1 wrote winapp=0 before the ini finished loading on the worker).
+CACHE_SCHEMA = 2
+
 
 def _cache_payload(categories: Iterable) -> dict[str, dict[str, int]]:
-    """Build the {key: {size, files}} snapshot persisted to the scan cache."""
-    return {c.key: {"size": c.size, "files": c.files} for c in categories}
+    """Build the {key: {size, files}} snapshot persisted to the scan cache.
+
+    Rule-based categories whose rules are not loaded yet are SKIPPED: their
+    measurement is not 0, it is unknown. Persisting that placeholder used to
+    poison the cache with winapp=0, which the fresh-cache startup then showed
+    forever ("limpio" for a category that really holds GBs).
+    """
+    payload: dict[str, dict[str, int]] = {}
+    for cat in categories:
+        if getattr(cat, "is_rule_based", False) and not cat.rules:
+            continue
+        payload[cat.key] = {"size": cat.size, "files": cat.files}
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +333,7 @@ class LimpiaProController(QObject):
         self.categories = list(categories) if categories is not None \
             else build_categories(load_winapp=not defer_winapp)
         self.cache_service = cache_service or CacheService(
-            get_cache_file(), 1, APP_VERSION)
+            get_cache_file(), CACHE_SCHEMA, APP_VERSION)
         self._cancel_requested = False
         self._busy = False
         self._thread: QThread | None = None
@@ -452,10 +469,15 @@ class LimpiaProController(QObject):
             return len(rules)
 
         worker = TaskWorker(work)
-        worker.done.connect(self.winapp_loaded)
+        # ORDER MATTERS: release the busy flag BEFORE announcing the result.
+        # The startup handler chain reacts to winapp_loaded by triggering the
+        # deferred analysis, and analyze_all() is a no-op while busy is set
+        # (that ordering bug left the whole clean page at 0 on every start
+        # with a stale cache, because the queued scan was silently dropped).
         worker.done.connect(self._release_busy)
-        worker.failed.connect(self.winapp_error)
+        worker.done.connect(self.winapp_loaded)
         worker.failed.connect(self._release_busy)
+        worker.failed.connect(self.winapp_error)
         self._start_worker(worker, worker.done, worker.failed)
 
     # ---------------------------------------------------------- internals

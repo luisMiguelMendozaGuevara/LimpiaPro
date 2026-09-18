@@ -58,6 +58,7 @@ from .pages import (
     CleanPage,
     DuplicatePage,
     LogPage,
+    SettingsPage,
     StartupPage,
     UninstallPage,
     UpdatePage,
@@ -75,6 +76,7 @@ _NAV = [
     ("update", "nav.update"),
     ("uninstall", "nav.uninstall"),
     ("log", "nav.log"),
+    ("settings", "nav.settings"),
 ]
 
 
@@ -226,8 +228,19 @@ class MainWindow(QMainWindow):
         theme = self.settings.theme
         dark = {"dark": True, "light": False, "system": None}[theme]
         ui_theme.apply_theme(QApplication.instance(), dark=dark)
+        # The sidebar toggle mirrors the EFFECTIVE theme ("system" follows
+        # Windows); blockSignals stops the sync from re-saving on every
+        # change. The Settings page can pick "system" as well.
+        effective_dark = ui_theme.system_is_dark() if dark is None else dark
+        self.theme_toggle.blockSignals(True)
+        self.theme_toggle.setChecked(effective_dark)
+        self.theme_toggle.blockSignals(False)
         self.theme_toggle.setText(
-            t("theme.dark") if dark else t("theme.light"))
+            t("theme.dark") if effective_dark else t("theme.light"))
+        # Keep the Settings selectors in sync (theme may come from here).
+        settings_page = self._pages.get("settings")
+        if settings_page is not None:
+            settings_page.refresh_from_settings()
         # Re-render nav + page icons in the new palette.
         for key, btn in self.nav_buttons.items():
             btn.setIcon(icons.nav(icons.NAV_ICONS[key]))
@@ -259,6 +272,12 @@ class MainWindow(QMainWindow):
         disk walk happens at all. Stale or missing cache keeps the old
         behavior (full analysis). A manual Analyze always rescans."""
         if self.busy:
+            # The deferred winapp load keeps the controller busy for a few
+            # hundred ms. If this timer fires inside that window the scan
+            # must be QUEUED, not dropped: dropping it left every row at 0
+            # until the user pressed Analyze by hand.
+            if not self._winapp_ready and self._winapp_load_is_startup:
+                self._auto_analyze_pending = True
             return
         cache = self.controller.cache_service
         if cache.is_fresh():
@@ -333,6 +352,8 @@ class MainWindow(QMainWindow):
                 page = UpdatePage(self)
             elif key == "uninstall":
                 page = UninstallPage(self)
+            elif key == "settings":
+                page = SettingsPage(self)
             else:
                 page = LogPage(self)
             self._pages[key] = page
@@ -433,7 +454,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------ flows
 
     def _apply_cache(self) -> None:
-        """Show cached sizes immediately (instant startup)."""
+        """Show cached sizes immediately (instant startup).
+
+        The rows are refreshed too: without it the cached numbers only
+        reached the total label and every category row kept its placeholder
+        (the fresh-cache path never emits category_updated).
+        """
         cached = self.controller.cache_service.load()
         for cat in self.controller.categories:
             entry = cached.get(cat.key)
@@ -441,6 +467,7 @@ class MainWindow(QMainWindow):
                                                        (int, float)):
                 cat.size = int(entry.get("size", 0))
                 cat.files = int(entry.get("files", 0))
+        self.pages_clean.refresh_results()
 
     def analyze_all(self) -> None:
         """Initiate a full analysis of all categories."""

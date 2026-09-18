@@ -164,6 +164,11 @@ class CleanCategory:
         self.needs_admin = False
         self.recycle_bin = False
         self.rules: list = []
+        # True when this category is DEFINED by winapp2 rules (its rules may
+        # still be empty while the ini loads on a worker). A rule-based
+        # category with no rules loaded measures nothing, so its result must
+        # never be persisted: a cached winapp=0 would stick forever.
+        self.is_rule_based = False
         self.size = 0
         self.files = 0
         self.errors = 0
@@ -764,6 +769,9 @@ def build_categories(load_winapp: bool = True):
         [], "\U0001F4E6")
     cat_winapp.rules = [r2 for s in rules for r2 in s.rules]
     cat_winapp.needs_admin = True
+    # Rule-based even when load_winapp=False: its rules arrive later, and
+    # until then its measurement (0) is meaningless and must not be cached.
+    cat_winapp.is_rule_based = True
     cats.append(cat_winapp)
 
     return cats

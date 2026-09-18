@@ -130,6 +130,21 @@ QLabel#catCount {
     background: transparent;
 }
 
+/* ------------------------------------------------------- settings page */
+
+QFrame#settingCard {
+    background-color: %CARD_ALT%;
+    border: 1px solid %BORDER%;
+    border-radius: 10px;
+}
+
+QLabel#sectionTitle {
+    font-size: 14px;
+    font-weight: 600;
+    color: %TEXT%;
+    background: transparent;
+}
+
 /* ------------------------------------------------------------ buttons */
 
 QPushButton {

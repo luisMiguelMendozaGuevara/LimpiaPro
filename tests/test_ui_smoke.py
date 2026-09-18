@@ -50,18 +50,18 @@ def _spin(qapp, busy, timeout_ms=10000):
     assert not busy(), "operation did not finish in time"
 
 
-def test_window_builds_all_six_pages(qapp, controller, settings):
+def test_window_builds_all_seven_pages(qapp, controller, settings):
     win = MainWindow(settings=settings, controller=controller)
     win.show()
     qapp.processEvents()
     try:
         for key in ("clean", "startup", "dupes", "update",
-                    "uninstall", "log"):
+                    "uninstall", "log", "settings"):
             win.show_page(key)
             qapp.processEvents()
         assert set(win._pages) == {"clean", "startup", "dupes",
-                                   "update", "uninstall", "log"}
-        assert win.stack.count() == 6
+                                   "update", "uninstall", "log", "settings"}
+        assert win.stack.count() == 7
         assert set(win.nav_buttons) == set(win._pages)
         # the clean page has one row per category
         assert set(win.pages_clean.rows) == {"a", "b"}
