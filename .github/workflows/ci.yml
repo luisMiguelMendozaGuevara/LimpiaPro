@@ -24,12 +24,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install linting tools
-        # Single source of truth (S7): floating `pip install ruff pyright
-        # bandit` already broke the Bandit gate once (1.7 -> 1.9 jump).
+      - name: Install dependencies
+        # Pyright type-checks the application, so it needs the RUNTIME
+        # dependencies as well: without PySide6 every `import PySide6.*`
+        # is a reportMissingImports error (reportMissingImports is on).
+        # `pip install ruff pyright bandit` floating already broke this
+        # gate once (Bandit 1.7 -> 1.9), hence the pinned dev file.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run Ruff (linter)
         run: ruff check limpiapro/ tests/
