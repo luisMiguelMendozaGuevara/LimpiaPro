@@ -11,8 +11,9 @@ from limpiapro.categories import CleanCategory
 
 def _make_junction(link, target) -> bool:
     """Create an NTFS junction (works without administrator rights)."""
-    result = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
-                            capture_output=True, text=True)
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True, text=True
+    )
     return result.returncode == 0
 
 
@@ -36,8 +37,7 @@ def test_junction_location_is_removed_as_link_only(tmp_path):
 
     category = CleanCategory("links", "Links", "", [str(link)])
     targets = [path for _rule, path in category._iter_targets()]
-    assert targets == [str(link)], \
-        "the junction must not expose its target's contents as targets"
+    assert targets == [str(link)], "the junction must not expose its target's contents as targets"
 
     removed, errors, _freed = category.clean()
 
