@@ -1,6 +1,6 @@
 [project]
 name = "limpiapro"
-version = "2.8"
+version = "2.9"
 description = "CCleaner-style system cleaner"
 requires-python = ">=3.10"
 
