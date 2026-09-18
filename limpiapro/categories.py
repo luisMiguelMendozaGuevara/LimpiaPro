@@ -57,8 +57,11 @@ def user_dirs():
     """
     return {
         "temp": r"%TEMP%",
-        "win_temp": r"C:\Windows\Temp",
-        "prefetch": r"C:\Windows\Prefetch",
+        # %SystemRoot% instead of a hardcoded C:\Windows: Windows can live
+        # on another drive (or be relocated), and the docstring contract is
+        # that every entry is an expandable template.
+        "win_temp": r"%SystemRoot%\Temp",
+        "prefetch": r"%SystemRoot%\Prefetch",
         "recent": r"%APPDATA%\Microsoft\Windows\Recent",
         "explorer_cache": r"%LOCALAPPDATA%\Microsoft\Windows\Explorer",
         "edge": r"%LOCALAPPDATA%\Microsoft\Edge\User Data",
@@ -68,8 +71,8 @@ def user_dirs():
         "opera": r"%APPDATA%\Opera Software\Opera Stable",
         "opera_gx": r"%APPDATA%\Opera Software\Opera GX Stable",
         "firefox": r"%APPDATA%\Mozilla\Firefox\Profiles",
-        "update_cache": r"C:\Windows\SoftwareDistribution\Download",
-        "cbs_logs": r"C:\Windows\Logs\CBS",
+        "update_cache": r"%SystemRoot%\SoftwareDistribution\Download",
+        "cbs_logs": r"%SystemRoot%\Logs\CBS",
         "dump": r"%LOCALAPPDATA%\CrashDumps",
     }
 

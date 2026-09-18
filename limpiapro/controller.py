@@ -32,6 +32,7 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 from . import APP_VERSION
 from .categories import build_categories
+from .i18n import t
 from .paths import get_cache_file
 from .recycle import empty_recycle_bin, recycle_bin_size
 from .services import CacheService
@@ -442,9 +443,11 @@ class LimpiaProController(QObject):
             for cat in self.categories:
                 if cat.key == "winapp":
                     cat.rules = [r2 for s in rules for r2 in s.rules]
+                    # i18n: the description is user-visible, so it must go
+                    # through t() (the same keys build_categories uses).
                     cat.description = (
-                        f"detected {len(rules)} apps" if rules
-                        else "no rules detected")
+                        t("cat.winapp.desc_detected", n=len(rules)) if rules
+                        else t("cat.winapp.desc_none"))
                     break
             return len(rules)
 

@@ -74,3 +74,16 @@ def test_clean_without_preview_still_works(tmp_path):
     removed, _errors, freed = cat.clean()
     assert removed == 4
     assert freed == 165
+
+
+def test_user_dirs_are_expandable_templates():
+    """Windows paths must be %ENV% templates, not hardcoded C:\\Windows:
+    Windows can be installed on another drive or relocated."""
+    from limpiapro.categories import user_dirs
+
+    dirs = user_dirs()
+    for key in ("win_temp", "prefetch", "update_cache", "cbs_logs"):
+        assert "%SystemRoot%" in dirs[key], f"{key} is hardcoded"
+        assert "C:\\Windows" not in dirs[key].upper().replace(
+            "%SYSTEMROOT%", ""), f"{key} still hardcodes C:\\Windows"
+

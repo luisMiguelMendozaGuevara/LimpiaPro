@@ -31,6 +31,8 @@ TAG_NAME = f"v{APP_VERSION}"
 ASSETS = (DIST_DIR / f"{APP_NAME}.exe", DIST_DIR / f"{APP_NAME}Debug.exe")
 PORTABLE_DIR = DIST_DIR / f"{APP_NAME}Portable"
 PORTABLE_ZIP = DIST_DIR / f"{APP_NAME}Portable.zip"
+SINGLE_ZIP = DIST_DIR / f"{APP_NAME}.zip"
+CHECKSUMS = DIST_DIR / "SHA256SUMS.txt"
 
 
 def _zip_portable() -> Path:
@@ -46,6 +48,41 @@ def _zip_portable() -> Path:
                 full = Path(base) / name
                 zf.write(full, full.relative_to(PORTABLE_DIR.parent))
     return PORTABLE_ZIP
+
+
+def _zip_single_exe() -> Path:
+    """Zip the one-file exe.
+
+    Browsers/AV commonly truncate or quarantine a bare 50 MB .exe download
+    ("the file is damaged"); the same bytes inside a .zip arrive intact,
+    and the archive is also what SmartScreen handles without friction.
+    """
+    import zipfile
+
+    if SINGLE_ZIP.exists():
+        SINGLE_ZIP.unlink()
+    with zipfile.ZipFile(SINGLE_ZIP, "w", zipfile.ZIP_DEFLATED,
+                         compresslevel=9) as zf:
+        zf.write(ASSETS[0], ASSETS[0].name)
+    return SINGLE_ZIP
+
+
+def _write_checksums(paths) -> Path:
+    """Write SHA256SUMS.txt so a download can be verified before running."""
+    import hashlib
+
+    lines = []
+    for path in sorted(paths, key=lambda p: p.name):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        lines.append(f"{digest}  {path.name}")
+        print(f"  sha256 {path.name}: {digest}")
+    CHECKSUMS.write_text("\n".join(lines) + "\n", encoding="ascii")
+    return CHECKSUMS
+
+
+def release_assets() -> list[Path]:
+    """The files uploaded to the release (built by build_executables)."""
+    return [*ASSETS, SINGLE_ZIP, PORTABLE_ZIP, CHECKSUMS]
 
 
 def _run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
@@ -71,6 +108,11 @@ def build_executables() -> None:
     portable_zip = _zip_portable()
     print(f"Portable zipped: {portable_zip} "
           f"({portable_zip.stat().st_size} bytes)")
+    single_zip = _zip_single_exe()
+    print(f"Single-file zipped: {single_zip} "
+          f"({single_zip.stat().st_size} bytes)")
+    checksums = _write_checksums(release_assets()[:-1])  # all but the file itself
+    print(f"Checksums written: {checksums}")
 
 
 def _api_request(
@@ -119,7 +161,12 @@ def _release_notes() -> str:
 
 
 def publish_release(token: str) -> str:
-    """Create/update the release and replace its two binary assets."""
+    """Create/update the release and replace all of its assets.
+
+    Assets: the one-file exe, the same exe inside a zip (bare .exe
+    downloads get truncated or quarantined by browsers/AV), the portable
+    OneDir zip, the debug exe and SHA256SUMS.txt for verification.
+    """
     release = _api_request("GET", f"/releases/tags/{TAG_NAME}", token, allow_404=True)
     payload = {
         "tag_name": TAG_NAME,
@@ -142,8 +189,7 @@ def publish_release(token: str) -> str:
     if assets is None:
         assets = []
     existing = {asset["name"]: asset["id"] for asset in assets}
-    upload_assets = list(ASSETS) + [PORTABLE_ZIP]
-    for asset_path in upload_assets:
+    for asset_path in release_assets():
         if asset_path.name in existing:
             _api_request("DELETE", f"/releases/assets/{existing[asset_path.name]}", token)
             print(f"Asset anterior eliminado: {asset_path.name}")

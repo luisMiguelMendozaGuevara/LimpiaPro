@@ -197,3 +197,11 @@ def test_load_winapp_rules_delivers_the_count(qapp):
 
     assert seen, "winapp_loaded was never delivered"
     assert isinstance(seen[0], int) and seen[0] >= 0, f"bad payload: {seen[0]!r}"
+
+    # The description must be translated (was hardcoded English).
+    from limpiapro.i18n import t
+    winapp = next(c for c in controller.categories if c.key == "winapp")
+    if seen[0]:
+        assert winapp.description == t("cat.winapp.desc_detected", n=seen[0])
+    else:
+        assert winapp.description == t("cat.winapp.desc_none")
