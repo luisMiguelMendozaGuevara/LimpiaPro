@@ -1,7 +1,12 @@
 # LimpiaPro v2.9
 
-## Correccion de seguridad (importante)
+## Correcciones
 
+- **Cargar reglas winapp2 estaba roto**: `winapp_loaded` se declaraba como
+  `Signal(int)` y PySide6 rechazaba la conexion con `done(PyObject)`
+  (`RuntimeError: Failed to connect signal...`), asi que cargar un
+  `winapp2.ini` no hacia nada. Ahora es `Signal(object)` y el conteo de
+  reglas se entrega correctamente. Test de regresion incluido.
 - **Nunca se atraviesan enlaces al limpiar.** Si la ubicacion de una
   categoria es un junction o un symlink, antes se seguia el enlace y se
   borraban los archivos REALES de la carpeta destino (por ejemplo, un

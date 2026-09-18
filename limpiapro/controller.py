@@ -287,7 +287,11 @@ class LimpiaProController(QObject):
     clean_cancelled = Signal()
 
     # winapp2 events
-    winapp_loaded = Signal(int)
+    # Signal(object): TaskWorker.done emits PyObject, and PySide6 refuses to
+    # connect "done(PyObject)" to a narrower "winapp_loaded(int)" (it raises
+    # at connect time and blocked the whole winapp-rules load). The payload
+    # is still the detected rule count (an int).
+    winapp_loaded = Signal(object)
     winapp_error = Signal(str)
 
     # generic

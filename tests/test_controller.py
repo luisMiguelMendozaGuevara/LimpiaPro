@@ -2,7 +2,8 @@
 by running workers synchronously; the QThread wiring is exercised with a
 QCoreApplication + event processing."""
 
-
+import time
+from pathlib import Path
 
 from limpiapro.categories import CleanCategory
 from limpiapro.controller import (
@@ -14,6 +15,8 @@ from limpiapro.controller import (
     PreviewWorker,
     TaskWorker,
 )
+
+REPO = Path(__file__).resolve().parent.parent
 
 
 def _make_categories(tmp_path):
@@ -152,7 +155,6 @@ def test_controller_api_roundtrip(tmp_path, qapp):
 
 def _spin(app, busy_flag, timeout_ms=10000):
     """Process events until the controller is no longer busy."""
-    import time
     deadline = time.monotonic() + timeout_ms / 1000
     while busy_flag() and time.monotonic() < deadline:
         app.processEvents()
@@ -168,3 +170,30 @@ def test_controller_rejects_double_operation(tmp_path):
     controller.analyze()  # must be a no-op
     controller.clean(["a"])
     controller.preview(["a"])
+
+
+def test_load_winapp_rules_delivers_the_count(qapp):
+    """Regression: TaskWorker.done emits PyObject, and PySide6 raises
+    'Failed to connect signal "done(PyObject)" to "winapp_loaded(int)"'
+    at connect time, which broke the whole winapp-rules load. The signal
+    must stay Signal(object) and still deliver the detected rule count."""
+    ini = REPO / "winapp2.ini"
+    if not ini.exists():
+        import pytest
+        pytest.skip("bundled winapp2.ini not present")
+
+    controller = LimpiaProController()
+    seen = []
+    controller.winapp_loaded.connect(seen.append)
+    controller.winapp_error.connect(
+        lambda msg: seen.append(RuntimeError(msg)))
+
+    controller.load_winapp_rules(str(ini))  # must not raise
+
+    deadline = time.monotonic() + 30
+    while not seen and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert seen, "winapp_loaded was never delivered"
+    assert isinstance(seen[0], int) and seen[0] >= 0, f"bad payload: {seen[0]!r}"
