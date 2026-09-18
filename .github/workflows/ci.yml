@@ -28,8 +28,10 @@ jobs:
         # Pyright type-checks the application, so it needs the RUNTIME
         # dependencies as well: without PySide6 every `import PySide6.*`
         # is a reportMissingImports error (reportMissingImports is on).
-        # `pip install ruff pyright bandit` floating already broke this
-        # gate once (Bandit 1.7 -> 1.9), hence the pinned dev file.
+        # The dev tools must come from the exact pins of
+        # requirements-dev.txt: a floating install already broke the
+        # Bandit gate once (1.7 -> 1.9), which is asserted by
+        # test_security_hardening.
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt

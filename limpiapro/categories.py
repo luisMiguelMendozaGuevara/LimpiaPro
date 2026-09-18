@@ -300,7 +300,13 @@ class CleanCategory:
             for loc in self._locations_existing():
                 if should_cancel and should_cancel():
                     return
-                if os.path.isdir(loc):
+                # SECURITY: never list THROUGH a reparse point. A symlink or
+                # junction sitting under a cleanup location would otherwise
+                # expose its TARGET's contents as deletable paths (a link in
+                # %TEMP% pointing at Documents would delete the documents).
+                # The link itself is yielded so it is removed as a link.
+                if (os.path.isdir(loc) and not is_junction(loc)
+                        and not os.path.islink(loc)):
                     try:
                         for name in os.listdir(loc):
                             if should_cancel and should_cancel():
@@ -419,7 +425,10 @@ class CleanCategory:
             def _scan_one_location(loc):
                 if should_cancel and should_cancel():
                     return 0, 0
-                if os.path.isdir(loc):
+                # SECURITY: reparse points are never walked (listing through
+                # a symlink/junction would measure its target's contents).
+                if (os.path.isdir(loc) and not is_junction(loc)
+                        and not os.path.islink(loc)):
                     # No on_progress here: callbacks would run on pool
                     # threads; the caller reports progress per location.
                     return _fast_folder_stats(loc, None, should_cancel)

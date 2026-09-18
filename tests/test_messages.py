@@ -14,10 +14,13 @@ class _Cat:
 
 
 def test_clean_confirmation_builds_heading_and_items():
+    # Language-agnostic: CI runs in English, development in Spanish, and
+    # both must pass. Sizes come from format_size (locale-independent).
     heading, _subtitle, items, notes = clean_confirmation(
         [_Cat("browser", "Cache de navegadores", 1_500_000_000),
          _Cat("temp", "Archivos temporales", 500_000)])
-    assert "2 categorias" in heading
+    assert "2" in heading
+    assert "1.4 GB" in heading
     assert items[0] == ("Cache de navegadores", "1.4 GB")
     assert items[1][1] == "488.3 KB"
     assert t("msg.clean_note_browsers") in notes
