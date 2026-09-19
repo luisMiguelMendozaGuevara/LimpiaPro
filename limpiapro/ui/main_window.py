@@ -410,7 +410,7 @@ class MainWindow(QMainWindow):
         Returns:
             MainWindow: The new window (the caller's window is closed).
         """
-        page_key = page_key or getattr(self, "_current_key", "clean")
+        page = page_key or getattr(self, "_current_key", "clean")
         geometry = self.geometry()
         self._closing = True          # skip the busy-cancel close handshake
         self.setAttribute(Qt.WA_DeleteOnClose, True)  # free the old window
@@ -418,7 +418,7 @@ class MainWindow(QMainWindow):
                                 controller=self.controller)
         new_window.setGeometry(geometry)
         new_window.show()
-        new_window.show_page(page_key)
+        new_window.show_page(page)
         self.close()
         return new_window
 
