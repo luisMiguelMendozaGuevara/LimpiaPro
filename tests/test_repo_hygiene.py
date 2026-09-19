@@ -8,6 +8,7 @@ code itself is fine. That exact failure shipped once, so it is pinned here.
 These tests are cheap and read files directly (no imports of the app).
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -59,3 +60,23 @@ def test_ci_workflow_pins_actions_by_sha() -> None:
     for ref in refs:
         assert len(ref) == 40 and all(c in "0123456789abcdef" for c in ref), \
             f"action not pinned by full commit SHA: {ref}"
+
+
+def test_tests_never_write_to_the_real_user_data() -> None:
+    """conftest.py points LIMPIAPRO_DATA_DIR at a temp directory.
+
+    Without it a test run wrote its cache AND settings into the real user
+    profile (auto_analyze=False, a cache with unknown category keys), so
+    the installed app skipped its analysis and showed no sizes at all.
+    """
+    import tempfile
+
+    from limpiapro.paths import get_cache_file, get_logs_dir, get_user_data_dir
+
+    tmp = os.path.normcase(tempfile.gettempdir())
+    for path in (get_user_data_dir(), get_logs_dir(), get_cache_file()):
+        norm = os.path.normcase(path)
+        assert norm.startswith(tmp), \
+            f"a test would use the real user path: {path}"
+        assert "limpiapro_pytest_data" in norm, \
+            f"test data dir is not the isolated one: {path}"

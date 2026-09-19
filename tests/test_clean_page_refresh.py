@@ -110,6 +110,38 @@ def test_startup_analysis_is_not_dropped_while_winapp_loads(
         win.close()
 
 
+def test_foreign_fresh_cache_does_not_skip_the_analysis(qapp, tmp_path):
+    """A FRESH cache that describes other categories (e.g. one written by a
+    test run into the real user profile) must not make the UI skip the scan
+    and show nothing: that is exactly what happened in production."""
+    a = tmp_path / "cat_a"
+    a.mkdir()
+    (a / "one.tmp").write_bytes(b"x" * 100)
+    cats = [CleanCategory("a", "A", "desc a", [str(a)])]
+
+    service = CacheService(str(tmp_path / "foreign.json"), CACHE_SCHEMA,
+                           APP_VERSION)
+    service.save({"many": {"size": 12800, "files": 400}}, "win32")
+    assert service.is_fresh()
+
+    controller = LimpiaProController(categories=cats, cache_service=service)
+    settings = Settings(auto_analyze=True, confirm_before_clean=False)
+    win = MainWindow(settings=settings, controller=controller)
+    win.show()
+    qapp.processEvents()
+    try:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            qapp.processEvents()
+            if cats[0].size and not win.busy:
+                break
+            time.sleep(0.02)
+        assert cats[0].size == 100, "the analysis was skipped for a foreign cache"
+        assert win.pages_clean.rows["a"].size_lbl.text() == "100 B"
+    finally:
+        win.close()
+
+
 def test_fresh_cache_startup_refreshes_the_rows(qapp, tmp_path):
     """With a fresh cache the analysis is skipped: the numbers must still
     reach the category rows, not only the total label."""

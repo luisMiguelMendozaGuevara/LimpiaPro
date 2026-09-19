@@ -39,12 +39,16 @@ def get_user_data_dir() -> str:
              
     Notes:
         - Uses %LOCALAPPDATA% (e.g., C:\\Users\\John\\AppData\\Local).
+        - LIMPIAPRO_DATA_DIR overrides the location entirely: the test suite
+          points it at a temp dir so no test can ever touch (or pollute) the
+          real user cache/logs/settings.
         - Fallback: os.path.expanduser("~") if LOCALAPPDATA is undefined.
         - Directory creation: Silently ignores OSError if creation fails
           (e.g., permission denied, read-only filesystem).
     """
-    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    data_dir = os.path.join(base, "LimpiaPro")
+    override = os.environ.get("LIMPIAPRO_DATA_DIR")
+    base = override or os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    data_dir = base if override else os.path.join(base, "LimpiaPro")
     with contextlib.suppress(OSError):
         os.makedirs(data_dir, exist_ok=True)
     return data_dir

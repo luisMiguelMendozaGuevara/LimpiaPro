@@ -280,7 +280,7 @@ class MainWindow(QMainWindow):
                 self._auto_analyze_pending = True
             return
         cache = self.controller.cache_service
-        if cache.is_fresh():
+        if self._cache_is_usable():
             self._apply_cache()
             self.pages_clean.update_total()
             age = cache.age_seconds() or 0.0
@@ -293,6 +293,20 @@ class MainWindow(QMainWindow):
             self._auto_analyze_pending = True
             return
         self.analyze_all()
+
+    def _cache_is_usable(self) -> bool:
+        """True when the on-disk cache can stand in for a real scan.
+
+        Freshness alone is not enough: a payload that describes none of the
+        current categories (a foreign or test-written file) would make the
+        UI skip the analysis and show nothing at all.
+        """
+        service = self.controller.cache_service
+        if not service.is_fresh():
+            return False
+        cached = service.load()
+        keys = {c.key for c in self.controller.categories}
+        return bool(keys.intersection(cached))
 
     def _startup_winapp_load(self) -> None:
         """Load the bundled winapp2.ini after the first paint (E2.1).
