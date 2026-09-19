@@ -1,5 +1,7 @@
 """Settings page: theme, language, recycle-bin preference and locations."""
 
+import contextlib
+
 import pytest
 
 from limpiapro import APP_VERSION
@@ -21,7 +23,9 @@ def win(qapp, tmp_path):
     window.show_page("settings")
     qapp.processEvents()
     yield window
-    window.close()
+    # The language selector may have rebuilt (and deleted) this window.
+    with contextlib.suppress(RuntimeError):
+        window.close()
 
 
 @pytest.fixture(autouse=True)
@@ -48,14 +52,23 @@ def test_theme_selector_applies_and_persists(win, qapp):
     assert win.settings.theme == "dark"
 
 
-def test_language_selector_updates_settings_and_i18n(win, qapp):
+def test_language_selector_saves_and_rebuilds(win, qapp, monkeypatch):
+    """Changing the combo persists the choice and rebuilds the window so
+    the new language shows immediately (no restart)."""
+    calls = []
+    monkeypatch.setattr(win, "rebuild_for_language",
+                        lambda page_key=None: calls.append(page_key))
     page = win._get_page("settings")
+
     page.lang_combo.setCurrentIndex(page.lang_combo.findData("en"))
     qapp.processEvents()
     assert win.settings.language == "en"
+    assert calls == ["settings"]
+
     page.lang_combo.setCurrentIndex(page.lang_combo.findData("es"))
     qapp.processEvents()
     assert win.settings.language == "es"
+    assert calls == ["settings", "settings"]
 
 
 def test_recycle_preference_is_exposed_in_settings(win, qapp):
@@ -96,3 +109,16 @@ def test_language_preference_round_trips(qapp, tmp_path):
     path = tmp_path / "settings.json"
     Settings(auto_analyze=False, language="en").save(str(path))
     assert Settings.load(str(path)).language == "en"
+
+
+def test_rebuild_for_language_returns_an_english_window(win, qapp):
+    """Labels resolve t() at build time, so a live switch rebuilds the
+    window: the returned window must already be in the new language."""
+    win.settings.language = "en"
+    new_window = win.rebuild_for_language("settings")
+    try:
+        assert new_window.nav_buttons["clean"].text() == "Cleanup"
+        assert new_window.nav_buttons["settings"].text() == "Settings"
+        assert new_window.settings.language == "en"
+    finally:
+        new_window.close()

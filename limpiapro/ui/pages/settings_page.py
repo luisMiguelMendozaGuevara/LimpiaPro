@@ -179,11 +179,12 @@ class SettingsPage(QWidget):
             return
         self.host.settings.language = code
         self.host.settings.save()
-        # "auto" applies the detected system language; already-built widgets
-        # keep their text, so the visible change happens on the next start
-        # (MainWindow applies the saved language before building the UI).
+        # "auto" resolves to the detected system language. Labels resolve
+        # t() when they are built, so the window is rebuilt right away: the
+        # language change is visible immediately (no restart needed).
         set_language(code)
         self.host.set_status(t("settings.lang_saved"))
+        self.host.rebuild_for_language("settings")
 
     def _on_recycle_changed(self, on: bool) -> None:
         self.host._on_recycle_toggled(on)

@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME, APP_VERSION
-from ..i18n import set_language, t
+from ..i18n import LANG, set_language, t
 from ..settings import Settings
 from ..utils import _errlog, format_size, humanize_duration, is_admin
 from ..winapp2 import default_winapp_file
@@ -114,6 +114,7 @@ class MainWindow(QMainWindow):
         # which was the case: only the settings page called set_language)
         # left the whole interface in the detected language.
         set_language(self.settings.language)
+        _errlog(f"qt: language={LANG} (settings={self.settings.language!r})")
         # E2.1: never parse the bundled winapp2.ini synchronously here —
         # that delayed the first visible frame by the whole detection pass.
         # The rules load on a worker right after the window paints.
@@ -387,12 +388,39 @@ class MainWindow(QMainWindow):
         """
         page = self._get_page(key)
         self.stack.setCurrentWidget(page)
+        self._current_key = key
         btn = self.nav_buttons.get(key)
         if btn is not None:
             btn.setChecked(True)
         on_show = getattr(page, "on_show", None)
         if on_show is not None:
             on_show()
+
+    def rebuild_for_language(self, page_key: str | None = None) -> MainWindow:
+        """Recreate the window so every label uses the new language.
+
+        Labels resolve t() when they are built, so switching the language at
+        runtime requires rebuilding the interface. The controller (and any
+        running work) is shared with the new window, and the geometry and
+        current page are preserved, so the change looks instantaneous.
+
+        Args:
+            page_key: Page to show in the new window (default: the current).
+
+        Returns:
+            MainWindow: The new window (the caller's window is closed).
+        """
+        page_key = page_key or getattr(self, "_current_key", "clean")
+        geometry = self.geometry()
+        self._closing = True          # skip the busy-cancel close handshake
+        self.setAttribute(Qt.WA_DeleteOnClose, True)  # free the old window
+        new_window = MainWindow(settings=self.settings,
+                                controller=self.controller)
+        new_window.setGeometry(geometry)
+        new_window.show()
+        new_window.show_page(page_key)
+        self.close()
+        return new_window
 
     @property
     def pages_clean(self) -> CleanPage:
