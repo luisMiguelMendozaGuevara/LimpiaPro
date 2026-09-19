@@ -73,3 +73,26 @@ def test_settings_twins_of_the_sidebar_theme_toggle(win, qapp):
     qapp.processEvents()
     assert win.settings.theme == "light"
     assert page.theme_combo.currentData() == "light"
+
+
+def test_saved_language_is_applied_on_startup(qapp, tmp_path):
+    """Regression: set_language() was only reachable from this page, so a
+    saved preference was never applied and the UI stayed in the detected
+    language forever."""
+    settings = Settings(auto_analyze=False, language="en")
+    controller = LimpiaProController(
+        cache_service=CacheService(str(tmp_path / "c.json"), CACHE_SCHEMA,
+                                   APP_VERSION))
+    window = MainWindow(settings=settings, controller=controller)
+    try:
+        assert window.nav_buttons["clean"].text() == "Cleanup"
+        assert window.nav_buttons["settings"].text() == "Settings"
+    finally:
+        window.close()
+
+
+def test_language_preference_round_trips(qapp, tmp_path):
+    """The choice is persisted and honored on the next start."""
+    path = tmp_path / "settings.json"
+    Settings(auto_analyze=False, language="en").save(str(path))
+    assert Settings.load(str(path)).language == "en"

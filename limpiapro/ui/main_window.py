@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME, APP_VERSION
-from ..i18n import t
+from ..i18n import set_language, t
 from ..settings import Settings
 from ..utils import _errlog, format_size, humanize_duration, is_admin
 from ..winapp2 import default_winapp_file
@@ -109,6 +109,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         from ..controller import LimpiaProController as _LPC
         self.settings = (settings or Settings.load()).validate()
+        # Apply the SAVED language BEFORE any widget is built: every label
+        # resolves t() at construction time, so doing it later (or never,
+        # which was the case: only the settings page called set_language)
+        # left the whole interface in the detected language.
+        set_language(self.settings.language)
         # E2.1: never parse the bundled winapp2.ini synchronously here —
         # that delayed the first visible frame by the whole detection pass.
         # The rules load on a worker right after the window paints.

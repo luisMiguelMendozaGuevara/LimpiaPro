@@ -164,6 +164,7 @@ STRINGS = {
     "settings.lang_es": "Espanol",
     "settings.lang_en": "Ingles",
     "settings.lang_note": "El cambio de idioma se aplica al reiniciar.",
+    "settings.lang_saved": "Idioma guardado. Se aplicara al reiniciar la aplicacion.",
     "settings.group_behaviors": "Comportamiento",
     "settings.auto_analyze": "Analizar automaticamente al iniciar",
     "settings.confirm_clean": "Confirmar antes de limpiar",
