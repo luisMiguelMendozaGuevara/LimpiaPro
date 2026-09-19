@@ -79,13 +79,16 @@ def test_recycle_preference_is_exposed_in_settings(win, qapp):
     assert win.settings.delete_to_recycle_bin is True
 
 
-def test_settings_twins_of_the_sidebar_theme_toggle(win, qapp):
-    """Changing the theme from the sidebar must be reflected in the page."""
+def test_theme_is_chosen_only_from_the_settings_page(win, qapp):
+    """The sidebar keeps navigation only: the theme lives in Settings."""
+    assert not hasattr(win, "theme_toggle")
     page = win._get_page("settings")
-    win.theme_toggle.setChecked(False)  # light
+    page.theme_combo.setCurrentIndex(page.theme_combo.findData("light"))
     qapp.processEvents()
     assert win.settings.theme == "light"
-    assert page.theme_combo.currentData() == "light"
+    page.theme_combo.setCurrentIndex(page.theme_combo.findData("dark"))
+    qapp.processEvents()
+    assert win.settings.theme == "dark"
 
 
 def test_saved_language_is_applied_on_startup(qapp, tmp_path):

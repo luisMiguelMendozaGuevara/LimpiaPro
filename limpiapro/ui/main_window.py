@@ -34,7 +34,6 @@ from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
-    QCheckBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -214,36 +213,16 @@ class MainWindow(QMainWindow):
             self.nav_buttons[key] = btn
 
         lay.addStretch(1)
-
-        # Sidebar footer: light/dark toggle.
-        self.theme_toggle = QCheckBox(t("theme.dark"))
-        self.theme_toggle.setChecked(
-            self.settings.theme != "light")
-        self.theme_toggle.toggled.connect(self._on_theme_toggled)
-        lay.addWidget(self.theme_toggle)
+        # The theme (and every other preference) lives in the Settings page:
+        # the sidebar keeps navigation only.
         return frame
-
-    def _on_theme_toggled(self, dark: bool) -> None:
-        """Handle theme toggle changes."""
-        self.settings.theme = "dark" if dark else "light"
-        self.settings.save()
-        self.apply_theme()
 
     def apply_theme(self) -> None:
         """Apply the current theme and refresh every themed icon."""
         theme = self.settings.theme
         dark = {"dark": True, "light": False, "system": None}[theme]
         ui_theme.apply_theme(QApplication.instance(), dark=dark)
-        # The sidebar toggle mirrors the EFFECTIVE theme ("system" follows
-        # Windows); blockSignals stops the sync from re-saving on every
-        # change. The Settings page can pick "system" as well.
-        effective_dark = ui_theme.system_is_dark() if dark is None else dark
-        self.theme_toggle.blockSignals(True)
-        self.theme_toggle.setChecked(effective_dark)
-        self.theme_toggle.blockSignals(False)
-        self.theme_toggle.setText(
-            t("theme.dark") if effective_dark else t("theme.light"))
-        # Keep the Settings selectors in sync (theme may come from here).
+        # Keep the Settings selectors in sync (the theme is chosen there).
         settings_page = self._pages.get("settings")
         if settings_page is not None:
             settings_page.refresh_from_settings()
