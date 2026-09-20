@@ -199,11 +199,22 @@ def _downloads_guide() -> str:
 
     Kept in one file (docs/releases/DOWNLOADS.md) so a single edit updates
     the description of every future release, and users always get the same
-    explanation of the six assets.
+    explanation of the six assets. Maintainer comments (HTML comments at
+    the top of the file) are stripped: they document the repo, not the
+    published release.
     """
     if not DOWNLOADS_GUIDE.exists():
         return ""
-    return DOWNLOADS_GUIDE.read_text(encoding="utf-8")
+    text = DOWNLOADS_GUIDE.read_text(encoding="utf-8")
+    while True:
+        stripped = text.lstrip()
+        if not stripped.startswith("<!--"):
+            break
+        end = stripped.find("-->")
+        if end == -1:
+            break
+        text = stripped[end + 3:]
+    return text.strip()
 
 
 def _release_notes() -> str:

@@ -131,6 +131,8 @@ def test_release_notes_explain_every_download():
     assert "Que descargar" in notes
     assert "Comparativa rapida" in notes
     assert "LimpiaProSetup.exe" in notes
+    # Maintainer comments stay out of the published body.
+    assert "<!--" not in notes
 
 
 
