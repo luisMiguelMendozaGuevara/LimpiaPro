@@ -193,7 +193,8 @@ class CleanPage(QWidget):
         icons.apply(self.winapp_btn, "package")
         icons.apply(self.analyze_btn, "refresh")
         icons.apply(self.cancel_btn, "cancel", role="error")
-        icons.apply(self.clean_btn, "clean", role="on_accent")
+        # Trash can for the primary action: it deletes what is selected.
+        icons.apply(self.clean_btn, "trash", role="on_accent")
 
     def refresh_icons(self) -> None:
         """Re-apply every icon after a dark/light theme switch."""

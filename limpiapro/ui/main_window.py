@@ -271,12 +271,14 @@ class MainWindow(QMainWindow):
             age = cache.age_seconds() or 0.0
             self.set_status(t("status.cached",
                               age=humanize_duration(age)))
+            _errlog("qt: startup used the fresh cache (no scan)")
             return
         if not self._winapp_ready:
             # The rules are still loading on the worker: without them the
             # winapp row would measure 0 and never be refreshed. Wait.
             self._auto_analyze_pending = True
             return
+        _errlog("qt: startup analysis begins")
         self.analyze_all()
 
     def _cache_is_usable(self) -> bool:

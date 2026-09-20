@@ -72,6 +72,44 @@ def _maybe_elevate() -> bool:
         return False
 
 
+def _force_foreground(window) -> None:
+    """Bring the window to the front and give it focus on open.
+
+    After UAC elevation Windows denies the new process the foreground (the
+    consent dialog was the last foreground owner), so the window used to
+    open BEHIND every other window and looked like it had not started.
+    raise_/activateWindow cover the normal case; a short delayed retry with
+    the Win32 calls covers the elevated one.
+
+    Args:
+        window: The QMainWindow to surface.
+    """
+    from PySide6.QtCore import Qt, QTimer
+
+    def _surface() -> None:
+        window.setWindowState((window.windowState()
+                              & ~Qt.WindowMinimized) | Qt.WindowActive)
+        window.raise_()
+        window.activateWindow()
+
+    _surface()
+
+    def _retry() -> None:
+        if window.isActiveWindow():
+            return
+        _surface()
+        try:
+            hwnd = int(window.winId())
+            user32 = ctypes.windll.user32
+            user32.ShowWindow(hwnd, 9)          # SW_RESTORE
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+        except Exception:
+            pass  # best-effort: the window is visible either way
+
+    QTimer.singleShot(250, _retry)
+
+
 def main() -> None:
     """PySide6 application entry point.
     
@@ -127,6 +165,7 @@ def main() -> None:
     apply_theme(app)
     window = MainWindow()
     window.show()
+    _force_foreground(window)
     _errlog("qt: main window shown")
     if screenshot:
         from PySide6.QtCore import QTimer
