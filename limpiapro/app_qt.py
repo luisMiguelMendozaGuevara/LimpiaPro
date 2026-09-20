@@ -105,7 +105,7 @@ def _force_foreground(window) -> None:
             user32.BringWindowToTop(hwnd)
             user32.SetForegroundWindow(hwnd)
         except Exception:
-            pass  # best-effort: the window is visible either way
+            pass  # nosec B110 - best-effort; the window is visible either way
 
     QTimer.singleShot(250, _retry)
 
