@@ -191,14 +191,34 @@ def _api_request(
         raise RuntimeError(f"GitHub API {method} {url}: {exc.code} {detail}") from exc
 
 
+DOWNLOADS_GUIDE = PROJECT_ROOT / "docs" / "releases" / "DOWNLOADS.md"
+
+
+def _downloads_guide() -> str:
+    """The shared "what to download" section appended to every release.
+
+    Kept in one file (docs/releases/DOWNLOADS.md) so a single edit updates
+    the description of every future release, and users always get the same
+    explanation of the six assets.
+    """
+    if not DOWNLOADS_GUIDE.exists():
+        return ""
+    return DOWNLOADS_GUIDE.read_text(encoding="utf-8")
+
+
 def _release_notes() -> str:
+    body = ""
     for candidate in (
         PROJECT_ROOT / "docs" / "releases" / f"RELEASE_NOTES_v{APP_VERSION}.md",
         PROJECT_ROOT / f"RELEASE_NOTES_v{APP_VERSION}.md",
     ):
         if candidate.exists():
-            return candidate.read_text(encoding="utf-8")
-    return f"{APP_NAME} {TAG_NAME}\n\nAutomated Windows release."
+            body = candidate.read_text(encoding="utf-8")
+            break
+    if not body:
+        body = f"{APP_NAME} {TAG_NAME}\n\nAutomated Windows release."
+    guide = _downloads_guide()
+    return f"{body}\n\n---\n\n{guide}" if guide else body
 
 
 def publish_release(token: str) -> str:

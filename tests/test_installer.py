@@ -110,6 +110,30 @@ def test_code_section_lines_never_start_with_a_bracket():
     assert not offenders, f"lines starting with '[': {offenders}"
 
 
+def test_release_notes_explain_every_download():
+    """Every release body must explain what each asset is for: users were
+    left guessing which of the six files to pick."""
+    import importlib
+    import sys
+
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    upload_release = importlib.import_module("upload_release")
+
+    guide = (ROOT / "docs" / "releases" / "DOWNLOADS.md").read_text(
+        encoding="utf-8")
+    for asset in ("LimpiaProSetup.exe", "LimpiaProPortable.zip",
+                  "LimpiaPro.zip", "LimpiaPro.exe", "LimpiaProDebug.exe",
+                  "SHA256SUMS.txt"):
+        assert asset in guide, f"{asset} is not explained in DOWNLOADS.md"
+    # The guide is appended to the per-version notes automatically.
+    notes = upload_release._release_notes()
+    assert "Que descargar" in notes
+    assert "Comparativa rapida" in notes
+    assert "LimpiaProSetup.exe" in notes
+
+
+
 @pytest.mark.skipif(
     not ISS.exists(), reason="installer script not present")
 def test_installer_version_is_injected_not_hardcoded():

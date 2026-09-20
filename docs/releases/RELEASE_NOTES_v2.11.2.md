@@ -30,14 +30,3 @@ automaticamente al iniciar" este activo (Ajustes > Comportamiento).
 
 El boton principal de limpieza usa ahora un **icono de papelera** (antes un
 destello), mas claro: es la accion que borra lo seleccionado.
-
-## Descargas
-
-| Archivo | Para que |
-|---|---|
-| **`LimpiaProSetup.exe`** | **Recomendado**: instalador con desinstalador |
-| `LimpiaProPortable.zip` | Portable: descomprime y ejecuta, sin instalar |
-| `LimpiaPro.zip` | Un solo archivo, dentro de un zip |
-| `LimpiaPro.exe` | Un solo archivo (descarga directa, mas fragil) |
-| `LimpiaProDebug.exe` | Variante con consola para diagnostico |
-| `SHA256SUMS.txt` | Hashes para verificar la descarga |
