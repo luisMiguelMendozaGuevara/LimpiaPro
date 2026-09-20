@@ -55,6 +55,61 @@ def test_release_publishes_the_installer_asset():
     assert upload_release.INSTALLER.name == "LimpiaProSetup.exe"
 
 
+def _app_guid() -> str:
+    """The GUID shared by [Setup] AppId and the uninstall-key constant."""
+    import re
+
+    text = ISS.read_text(encoding="utf-8")
+    app_id = re.search(r"^AppId=\{\{([0-9A-Fa-f-]{36})", text, re.M)
+    assert app_id, "AppId not found in [Setup]"
+    return app_id.group(1)
+
+
+def test_dir_page_is_always_shown_and_reuses_the_previous_folder():
+    """Inno hides the destination page on an upgrade by default, which is
+    what made it look 'missing'."""
+    text = ISS.read_text(encoding="utf-8")
+    assert "DisableDirPage=no" in text
+    assert "UsePreviousAppDir=yes" in text
+
+
+def test_detects_an_installed_version_and_tells_the_user():
+    text = ISS.read_text(encoding="utf-8")
+    guid = _app_guid()
+    # The registry lookup must use the SAME AppId, or an existing install
+    # would not be recognized.
+    assert f"Uninstall\\{{{guid}}}_is1" in text
+    assert "GetInstalledValue('DisplayVersion')" in text
+    assert "GetInstalledValue('InstallLocation')" in text
+    assert "CustomMessage('PreviousVersion')" in text
+    assert "CustomMessage('AlreadyCurrent')" in text
+    # Both languages define the messages.
+    for key in ("PreviousVersion", "AlreadyCurrent", "RemoveOld"):
+        assert f"spanish.{key}=" in text
+        assert f"english.{key}=" in text
+
+
+def test_removing_an_old_installation_left_in_another_folder():
+    text = ISS.read_text(encoding="utf-8")
+    assert "CustomMessage('RemoveOld')" in text
+    assert "DelTree(PreviousInstallDir, True, True, True)" in text
+
+
+def test_running_app_is_closed_through_restart_manager():
+    text = ISS.read_text(encoding="utf-8")
+    assert "CloseApplications=yes" in text
+    assert "CloseApplicationsFilter={#AppExeName}" in text
+
+
+def test_code_section_lines_never_start_with_a_bracket():
+    """Inno's [Code] parser reads a line starting with '[' as a section
+    header; that broke the build with "Invalid section tag"."""
+    text = ISS.read_text(encoding="utf-8")
+    code = text.split("[Code]", 1)[1]
+    offenders = [line for line in code.splitlines() if line.startswith("[")]
+    assert not offenders, f"lines starting with '[': {offenders}"
+
+
 @pytest.mark.skipif(
     not ISS.exists(), reason="installer script not present")
 def test_installer_version_is_injected_not_hardcoded():
