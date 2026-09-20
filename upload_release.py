@@ -32,6 +32,7 @@ ASSETS = (DIST_DIR / f"{APP_NAME}.exe", DIST_DIR / f"{APP_NAME}Debug.exe")
 PORTABLE_DIR = DIST_DIR / f"{APP_NAME}Portable"
 PORTABLE_ZIP = DIST_DIR / f"{APP_NAME}Portable.zip"
 SINGLE_ZIP = DIST_DIR / f"{APP_NAME}.zip"
+INSTALLER = DIST_DIR / f"{APP_NAME}Setup.exe"
 CHECKSUMS = DIST_DIR / "SHA256SUMS.txt"
 
 
@@ -82,12 +83,49 @@ def _write_checksums(paths) -> Path:
 
 def release_assets() -> list[Path]:
     """The files uploaded to the release (built by build_executables)."""
-    return [*ASSETS, SINGLE_ZIP, PORTABLE_ZIP, CHECKSUMS]
+    return [*ASSETS, SINGLE_ZIP, PORTABLE_ZIP, INSTALLER, CHECKSUMS]
 
 
 def _run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
     print("  >", " ".join(args))
     return subprocess.run(args, cwd=PROJECT_ROOT, check=check, text=True)
+
+
+def _inno_setup_compiler() -> Path | None:
+    """Locate Inno Setup's command-line compiler (ISCC.exe).
+
+    Returns:
+        Path | None: The compiler, or None when Inno Setup is not installed.
+    """
+    candidates = [
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Inno Setup 6" / "ISCC.exe",
+        Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Inno Setup 6" / "ISCC.exe",
+        Path(os.environ.get("PROGRAMFILES", "")) / "Inno Setup 6" / "ISCC.exe",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _build_installer() -> Path | None:
+    """Compile the Inno Setup installer (LimpiaProSetup.exe).
+
+    The installer wraps the OneDir build (instant start, and an uninstall
+    entry in Apps & features). Skipped with a warning when Inno Setup is
+    missing, so the release still works without it.
+    """
+    iscc = _inno_setup_compiler()
+    if iscc is None:
+        print("WARNING: Inno Setup (ISCC.exe) not found; skipping the installer. "
+              "Install it with: winget install JRSoftware.InnoSetup")
+        return None
+    _run([str(iscc), f"/DAppVersion={APP_VERSION}",
+          str(PROJECT_ROOT / "installer" / "LimpiaPro.iss")])
+    if not INSTALLER.exists():
+        raise RuntimeError(f"Inno Setup did not create {INSTALLER}")
+    print(f"Installer built: {INSTALLER} ({INSTALLER.stat().st_size} bytes)")
+    return INSTALLER
 
 
 def build_executables() -> None:
@@ -96,7 +134,8 @@ def build_executables() -> None:
     - LimpiaPro.spec        one-file exe (single-download asset)
     - LimpiaProDebug.spec   console variant for troubleshooting
     - LimpiaProPortable.spec OneDir folder zipped as the portable asset
-                            (starts instantly: no %TEMP% unpacking)
+                            (starts instantly: no %TEMP% unpacking); the
+                            Inno Setup installer is built from it too.
     """
     for spec, exe in (("LimpiaPro.spec", ASSETS[0]),
                       ("LimpiaProDebug.spec", ASSETS[1]),
@@ -111,7 +150,9 @@ def build_executables() -> None:
     single_zip = _zip_single_exe()
     print(f"Single-file zipped: {single_zip} "
           f"({single_zip.stat().st_size} bytes)")
-    checksums = _write_checksums(release_assets()[:-1])  # all but the file itself
+    _build_installer()
+    checksums = _write_checksums([p for p in release_assets()
+                                  if p.exists() and p != CHECKSUMS])
     print(f"Checksums written: {checksums}")
 
 
@@ -190,6 +231,9 @@ def publish_release(token: str) -> str:
         assets = []
     existing = {asset["name"]: asset["id"] for asset in assets}
     for asset_path in release_assets():
+        if not asset_path.exists():
+            print(f"Asset omitido (no construido): {asset_path.name}")
+            continue
         if asset_path.name in existing:
             _api_request("DELETE", f"/releases/assets/{existing[asset_path.name]}", token)
             print(f"Asset anterior eliminado: {asset_path.name}")
