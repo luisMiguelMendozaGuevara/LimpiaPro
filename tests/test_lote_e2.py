@@ -132,7 +132,7 @@ def test_controller_defer_winapp(tmp_path):
     assert winapp.rules == []
     # Other categories are unaffected by the deferral.
     assert {c.key for c in ctrl.categories} >= {
-        "temp", "browser", "apps", "history", "winapp"}
+        "temp", "browser", "apps", "winapp"}
 
 
 # ------------------------------------------------------- E2.1/E2.2 wiring

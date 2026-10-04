@@ -188,10 +188,6 @@ STRINGS = {
     "cat.apps.desc": ("Explorer thumbnails, crash reports, Windows "
                       "Update cache and system logs. Windows recreates "
                       "them whenever needed."),
-    "cat.history.label": "Recent history",
-    "cat.history.desc": ("Recent documents and searches shown in the "
-                         "Start menu. Your files are not deleted, only "
-                         "the access trail."),
     "cat.winapp.label": "Applications (winapp2 rules)",
     "cat.winapp.desc_detected": ("Community winapp2.ini database: {n} "
                                  "apps detected. Only caches and logs "

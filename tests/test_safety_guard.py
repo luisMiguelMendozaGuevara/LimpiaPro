@@ -82,8 +82,9 @@ def test_descendant_folder_never_reaches_delete(tmp_path):
 
 
 def test_category_clean_refuses_protected_descendant(tmp_path):
-    """End-to-end through CleanCategory: the category lists the folder,
-    the gate refuses it before any filesystem access."""
+    """End-to-end through CleanCategory: a folder under Documents is never
+    listed nor attempted, so it survives untouched (the analyzer must not
+    advertise targets the gate will refuse)."""
     docs = tmp_path / "Documents"
     docs.mkdir()
     folder = docs / "Important"
@@ -91,10 +92,11 @@ def test_category_clean_refuses_protected_descendant(tmp_path):
     (folder / "keep.txt").write_text("keep", encoding="utf-8")
 
     cat = CleanCategory("docs", "Docs", "", [str(docs)])
-    removed, errors, _freed = cat.clean()
+    files, scanned = cat.list_files()
+    assert files == [] and scanned == 0
 
-    assert removed == 0
-    assert errors >= 1
+    removed, errors, _freed = cat.clean()
+    assert removed == 0 and errors == 0
     assert (folder / "keep.txt").exists()
 
 
@@ -227,3 +229,73 @@ def test_tmp_children_still_allowed(tmp_path):
     assert safety_guard().is_safe_delete_target(str(scratch), is_dir=True) is True
     assert safety_guard().is_safe_delete_target(
         str(scratch / "sub"), is_dir=True) is True
+
+
+def _recent_tree(tmp_path, monkeypatch):
+    """Point %APPDATA% at tmp_path, build the Recent tree and reset caches."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    invalidate_safety_guard()
+    recent = tmp_path / "Microsoft" / "Windows" / "Recent"
+    recent.mkdir(parents=True)
+    return recent
+
+
+def test_windows_shell_recent_tree_is_protected(tmp_path, monkeypatch):
+    """Recent files, Quick Access pins and jump lists are user navigation
+    state: the whole Recent tree is refused, file or folder."""
+    recent = _recent_tree(tmp_path, monkeypatch)
+    (recent / "Documento.txt.lnk").write_text("x", encoding="utf-8")
+    pins = recent / "CustomDestinations"
+    pins.mkdir()
+    (pins / "abc.customDestinations-ms").write_bytes(b"pin")
+    jumps = recent / "AutomaticDestinations"
+    jumps.mkdir()
+    (jumps / "abc.automaticDestinations-ms").write_bytes(b"jump")
+
+    guard = safety_guard()
+    for target, is_dir in (
+        (str(recent), True),
+        (str(pins), True),
+        (str(jumps), True),
+        (str(pins / "abc.customDestinations-ms"), False),
+        (str(jumps / "abc.automaticDestinations-ms"), False),
+        (str(recent / "Documento.txt.lnk"), False),
+    ):
+        assert guard.is_safe_delete_target(target, is_dir=is_dir) is False
+
+    gone, _freed, errors = _delete_measured(str(recent / "Documento.txt.lnk"))
+    assert gone is False
+    assert errors and errors[0].kind == "safety"
+    assert pins.exists() and jumps.exists()
+
+
+def test_winapp_rule_targeting_recent_is_skipped(tmp_path, monkeypatch):
+    """A winapp2 rule that points at the Recent tree is ignored: it never
+    shows up in the preview, the measurement or the deletion."""
+    recent = _recent_tree(tmp_path, monkeypatch)
+    (recent / "recent.lnk").write_text("x", encoding="utf-8")
+    pins = recent / "CustomDestinations"
+    pins.mkdir()
+    (pins / "abc.customDestinations-ms").write_bytes(b"pin")
+
+    rule = WinAppRule(root=str(recent), recurse=True, patterns=("*",),
+                      remove_self=True)
+    cat = CleanCategory("winapp", "Winapp", "", [])
+    cat.rules = [rule]
+
+    assert list(cat._iter_targets()) == []
+    cat.scan()
+    assert cat.size == 0 and cat.files == 0
+    removed, errors, _freed = cat.clean()
+    assert removed == 0 and errors == 0
+    assert pins.exists() and (recent / "recent.lnk").exists()
+
+
+def test_build_categories_has_no_history_category(monkeypatch):
+    """The standard set no longer carries a category that sweeps the
+    Recent tree (that cleanup is what wiped anchored shortcuts)."""
+    from limpiapro.categories import build_categories
+
+    cats = build_categories(load_winapp=False)
+    assert "history" not in {c.key for c in cats}
+

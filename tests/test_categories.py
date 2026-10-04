@@ -87,3 +87,55 @@ def test_user_dirs_are_expandable_templates():
         assert "C:\\Windows" not in dirs[key].upper().replace(
             "%SYSTEMROOT%", ""), f"{key} still hardcodes C:\\Windows"
 
+
+def test_scan_and_preview_skip_targets_refused_by_safety(tmp_path, monkeypatch):
+    """The analyzer must not show a file the safety gate will refuse, or
+    the user sees "files that are not deleted"."""
+    import os
+
+    import limpiapro.categories as cats
+
+    loc = tmp_path / "loc"
+    loc.mkdir()
+    (loc / "ok.bin").write_bytes(b"x" * 10)
+    (loc / "bad.bin").write_bytes(b"y" * 999)
+
+    real = cats.is_safe_delete_target
+    monkeypatch.setattr(
+        cats, "is_safe_delete_target",
+        lambda p, is_dir=None: real(p, is_dir)
+        and os.path.basename(p) != "bad.bin")
+
+    cat = cats.CleanCategory("plain", "P", "d", [str(loc)])
+    files, scanned = cat.list_files()
+    assert [os.path.basename(f) for f in files] == ["ok.bin"]
+    assert scanned == 1
+    cat.scan()
+    assert cat.files == 1 and cat.size == 10
+
+
+def test_winapp_preview_and_scan_skip_safety_refused(tmp_path, monkeypatch):
+    """Same for rule-based categories: a matched file the gate refuses is
+    neither previewed nor measured."""
+    import os
+
+    import limpiapro.categories as cats
+    from limpiapro.winapp2 import WinAppRule
+
+    (tmp_path / "ok.log").write_text("a", encoding="utf-8")
+    (tmp_path / "bad.log").write_text("bbbb", encoding="utf-8")
+
+    real = cats.is_safe_delete_target
+    monkeypatch.setattr(
+        cats, "is_safe_delete_target",
+        lambda p, is_dir=None: real(p, is_dir)
+        and os.path.basename(p) != "bad.log")
+
+    cat = cats.CleanCategory("winapp", "W", "d", [])
+    cat.rules = [WinAppRule(root=str(tmp_path), recurse=True,
+                            patterns=("*.log",))]
+    files, scanned = cat.list_files()
+    assert [os.path.basename(f) for f in files] == ["ok.log"]
+    assert scanned == 1
+    assert cat.scan() == 1 and cat.files == 1
+

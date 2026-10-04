@@ -18,6 +18,12 @@ Policy Overview:
       is the cleanup itself, and winapp2 legitimately removes files under
       e.g. %UserProfile%\\Documents\\App\\logs.
 
+    * **Shell navigation state** — the whole %APPDATA%\\Microsoft\\Windows\\
+      Recent tree (recent-file shortcuts, the Quick Access pinned items
+      and the Explorer/taskbar jump lists in the *Destinations subfolders)
+      is refused as a target, file or folder. Those entries are what the
+      user *anchored*, not junk: a clean must never wipe them.
+
     * **Reparse points / junctions** — the real final path (os.path.realpath,
       which resolves junctions on Windows) is checked, so a target
       reached *through* a junction that resolves into a protected area
@@ -110,6 +116,15 @@ _SYSTEM_GUARD_DIRS = {
 _ENV_ROOTS = ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP",
               "PROGRAMFILES", "PROGRAMFILES(X86)", "ProgramData")
 
+# Windows shell navigation stores. The Recent tree holds the user's
+# "recent files" shortcuts and, inside its *Destinations subfolders, the
+# Quick Access pinned items and the Explorer/taskbar jump lists. That is
+# user navigation state chosen by the user (things they *anchored*), not
+# disposable junk: deleting it reads as "the cleaner wiped my pinned
+# shortcuts". The whole tree is therefore refused as a deletion target,
+# no matter which category or winapp2 rule asks for it.
+_SHELL_STATE_TEMPLATE = r"%APPDATA%\Microsoft\Windows\Recent"
+
 # KF_FLAG_DONT_VERIFY: return the configured path without requiring it to
 # exist (redirected-but-missing folders must still be protected).
 _KF_FLAG_DONT_VERIFY = 0x00004000
@@ -186,6 +201,52 @@ def _canon(path: str) -> str:
     """
     return os.path.normcase(os.path.normpath(
         os.path.expandvars(path))).lower().replace("/", "\\")
+
+
+# Canonical Recent tree root, computed lazily once and reset by
+# invalidate()/invalidate_safety_guard() so tests (or a relocated
+# profile) recompute it.
+_shell_state_root: str | None = None
+
+
+def windows_shell_state_root() -> str:
+    """Return the canonical Recent-tree root (Quick Access / jump lists).
+
+    The path is derived from %APPDATA% and cached until the safety guard
+    is invalidated. When %APPDATA% is unavailable the literal template is
+    returned, which simply never matches a real target.
+
+    Returns:
+        str: Canonical (backslash, lowercased) Recent-tree root.
+    """
+    global _shell_state_root
+    if _shell_state_root is None:
+        _shell_state_root = _canon(_SHELL_STATE_TEMPLATE)
+    return _shell_state_root
+
+
+def is_windows_shell_state(path: str) -> bool:
+    """True when `path` is the Recent tree or anything inside it.
+
+    Guards the user's navigation state (recent files, Quick Access pins
+    and jump lists) from every deletion path: the standard categories,
+    winapp2 rules and the pre-delete gate all consult this.
+
+    Args:
+        path (str): Path to test (may contain %ENV% variables).
+
+    Returns:
+        bool: True when the target lives in the protected Recent tree.
+    """
+    root = windows_shell_state_root()
+    canon = _canon(path)
+    return canon == root or canon.startswith(root + "\\")
+
+
+def _invalidate_shell_state_cache() -> None:
+    """Drop the memoized Recent-tree root (env may have changed)."""
+    global _shell_state_root
+    _shell_state_root = None
 
 
 class _GUID(ctypes.Structure):
@@ -329,6 +390,7 @@ class SafetyGuard:
         self._parent_clean.clear()
         self._critical_trees = None
         self._windows_dir = None
+        _invalidate_shell_state_cache()
 
     def exact_roots(self) -> frozenset[str]:
         """Get system dirs + environment roots: refused as exact targets.
@@ -648,6 +710,11 @@ class SafetyGuard:
             return False
         if norm in self.exact_roots():
             return False
+        # Windows shell navigation state (Recent tree: recent files, Quick
+        # Access pins and jump lists) is never a deletion target, file or
+        # folder, whatever category asks for it.
+        if is_windows_shell_state(norm):
+            return False
         if is_dir is None:
             try:
                 is_dir = os.path.isdir(os.path.expandvars(path))
@@ -670,6 +737,8 @@ class SafetyGuard:
             # resolved path gets the same deny-list treatment.
             if self._is_critical_file_target(real):
                 return False
+            if is_windows_shell_state(real):
+                return False
             return real == norm or not self._under_protected(real)
         # Folder target: refuse OS-critical trees first (D5), then the
         # folder itself or any folder under a protected user folder,
@@ -680,6 +749,8 @@ class SafetyGuard:
         if self.is_drive_root(real) or real in self.exact_roots():
             return False
         if self._is_critical_folder_target(real):
+            return False
+        if is_windows_shell_state(real):
             return False
         return not (self._under_protected(norm)
                     or self._under_protected(real))

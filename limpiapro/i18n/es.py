@@ -194,10 +194,6 @@ STRINGS = {
     "cat.apps.desc": ("Miniaturas del explorador, informes de errores, "
                       "cache de Windows Update y logs del sistema. "
                       "Windows los vuelve a crear cuando los necesita."),
-    "cat.history.label": "Historial reciente",
-    "cat.history.desc": ("Lista de documentos y busquedas recientes del "
-                         "menu Inicio. No borra tus archivos, solo el "
-                         "rastro de acceso."),
     "cat.winapp.label": "Aplicaciones (reglas winapp2)",
     "cat.winapp.desc_detected": ("Base de datos comunitaria winapp2.ini: "
                                  "{n} apps detectadas. Solo se borran "

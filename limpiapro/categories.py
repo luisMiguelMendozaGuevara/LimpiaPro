@@ -25,6 +25,7 @@ import threading
 
 from .audit_log import audit
 from .i18n import t
+from .safety import is_windows_shell_state
 from .utils import (
     PROGRESS_DELETE,
     DeleteError,
@@ -62,7 +63,6 @@ def user_dirs():
         # that every entry is an expandable template.
         "win_temp": r"%SystemRoot%\Temp",
         "prefetch": r"%SystemRoot%\Prefetch",
-        "recent": r"%APPDATA%\Microsoft\Windows\Recent",
         "explorer_cache": r"%LOCALAPPDATA%\Microsoft\Windows\Explorer",
         "edge": r"%LOCALAPPDATA%\Microsoft\Edge\User Data",
         "chrome": r"%LOCALAPPDATA%\Google\Chrome\User Data",
@@ -237,6 +237,12 @@ class CleanCategory:
         for rule in self.rules or []:
             root = os.path.normcase(os.path.abspath(
                 os.path.expandvars(rule.root)))
+            # The Windows shell Recent tree (recent files, Quick Access
+            # pins and jump lists) is user navigation state, never junk:
+            # skip any winapp2 rule that targets it, so neither the scan
+            # nor the clean ever lists or deletes those entries.
+            if is_windows_shell_state(root):
+                continue
             if os.path.exists(root) and not is_junction(root):
                 yield rule, root
 
@@ -250,6 +256,11 @@ class CleanCategory:
         traversal (so the scan can stat for free) or None when the root
         itself is the target file.
 
+        Every candidate also passes the delete-safety gate here (not only
+        at deletion time): the analyzer/preview must never advertise a
+        file the safety layer will refuse (e.g. System32 logs, loose
+        C:\\Windows files), or the user sees "files that are not deleted".
+
         Args:
             rule (WinAppRule): Rule whose masks/exclusions apply.
             root (str): Normalized, existing, non-junction root path.
@@ -260,7 +271,8 @@ class CleanCategory:
         """
         if os.path.isfile(root):
             if (self._match_re(os.path.basename(root), rule.patterns_re)
-                    and not rule.is_excluded(root)):
+                    and not rule.is_excluded(root)
+                    and is_safe_delete_target(root, is_dir=False)):
                 yield root, None
             return
         # One scandir traversal per root (never into junctions);
@@ -268,7 +280,8 @@ class CleanCategory:
         for entry in _iter_tree_files(root, should_cancel,
                                       recurse=rule.recurse):
             if (self._match_re(entry.name, rule.patterns_re)
-                    and not rule.is_excluded(entry.path)):
+                    and not rule.is_excluded(entry.path)
+                    and is_safe_delete_target(entry.path, is_dir=False)):
                 yield entry.path, entry
 
     def _iter_targets(self, should_cancel=None):
@@ -319,11 +332,26 @@ class CleanCategory:
                         for name in os.listdir(loc):
                             if should_cancel and should_cancel():
                                 return
-                            yield None, os.path.join(loc, name)
+                            path = os.path.join(loc, name)
+                            if is_windows_shell_state(path):
+                                continue
+                            # Same delete-safety gate clean() applies, so
+                            # the preview/measure never counts a target
+                            # that will be refused (folder targets under
+                            # protected folders, junctions into them, ...).
+                            if not is_safe_delete_target(
+                                    path, is_dir=(os.path.isdir(path)
+                                                  or is_junction(path))):
+                                continue
+                            yield None, path
                     except OSError:
                         pass
                 else:
-                    yield None, loc
+                    if (not is_windows_shell_state(loc)
+                            and is_safe_delete_target(
+                                loc, is_dir=(os.path.isdir(loc)
+                                             or is_junction(loc)))):
+                        yield None, loc
 
     def _scan_rules(self, on_progress=None, should_cancel=None):
         """Scan winapp2-rule targets: measure each matched file/folder.
@@ -433,13 +461,56 @@ class CleanCategory:
             def _scan_one_location(loc):
                 if should_cancel and should_cancel():
                     return 0, 0
+                # Shell navigation state (Recent tree) is never measured
+                # nor cleaned: reporting a size that can never be freed
+                # would leave the category stuck at a non-zero value.
+                if is_windows_shell_state(loc):
+                    return 0, 0
                 # SECURITY: reparse points are never walked (listing through
                 # a symlink/junction would measure its target's contents).
                 if (os.path.isdir(loc) and not is_junction(loc)
                         and not os.path.islink(loc)):
-                    # No on_progress here: callbacks would run on pool
-                    # threads; the caller reports progress per location.
-                    return _fast_folder_stats(loc, None, should_cancel)
+                    # Measure the SAME top-level set clean() deletes
+                    # (mirrors _iter_targets' plain branch, gate included),
+                    # so the analyzer never counts a target the safety
+                    # layer will refuse. No on_progress here: callbacks
+                    # would run on pool threads; the caller reports
+                    # progress per location.
+                    size = 0
+                    files = 0
+                    try:
+                        names = os.listdir(loc)
+                    except OSError:
+                        return 0, 0
+                    for name in names:
+                        if should_cancel and should_cancel():
+                            break
+                        path = os.path.join(loc, name)
+                        if is_windows_shell_state(path):
+                            continue
+                        if os.path.islink(path) or is_junction(path):
+                            continue  # never followed (matches the walk)
+                        try:
+                            if os.path.isdir(path):
+                                if not is_safe_delete_target(
+                                        path, is_dir=True):
+                                    continue
+                                part_size, part_files = _fast_folder_stats(
+                                    path, None, should_cancel)
+                            else:
+                                if not is_safe_delete_target(
+                                        path, is_dir=False):
+                                    continue
+                                part_size, part_files = (
+                                    os.path.getsize(path), 1)
+                        except OSError:
+                            continue
+                        size += part_size
+                        files += part_files
+                    return size, files
+                if not is_safe_delete_target(
+                        loc, is_dir=(os.path.isdir(loc) or is_junction(loc))):
+                    return 0, 0
                 loc_size = 0
                 with contextlib.suppress(OSError):
                     loc_size = os.path.getsize(loc)
@@ -694,7 +765,6 @@ def build_categories(load_winapp: bool = True):
     - browser: Browser caches (Edge, Chrome, Brave, Vivaldi, Opera, Firefox)
     - recycle: Recycle Bin (special case, uses shell API)
     - apps: Application caches (Explorer, CrashDumps, Windows Update, CBS logs)
-    - history: Recent files history
     - winapp: Winapp2.ini rules (detected applications)
 
     Args:
@@ -753,11 +823,6 @@ def build_categories(load_winapp: bool = True):
         "\U00002699")
     cat_apps.needs_admin = True
     cats.append(cat_apps)
-
-    cat_hist = CleanCategory(
-        "history", t("cat.history.label"), t("cat.history.desc"),
-        [d["recent"]], "\U0001F551")
-    cats.append(cat_hist)
 
     rules = ((parse_winapp_rules(default_winapp_file())
               if load_winapp else [])

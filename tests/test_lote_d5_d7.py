@@ -383,10 +383,13 @@ class TestD7ParallelScan:
 
     def test_plain_scan_tolerates_worker_crash(self, tmp_path, monkeypatch):
         _make_roots(tmp_path)
+        # A subfolder forces the per-entry _fast_folder_stats path so the
+        # crash below is exercised for the whole root1 location.
+        (tmp_path / "root1" / "sub").mkdir()
         real_stats = categories_mod._fast_folder_stats
 
         def flaky(folder, on_progress=None, should_cancel=None):
-            if folder.endswith("root1"):
+            if "root1" in folder:
                 raise RuntimeError("worker crash")
             return real_stats(folder, on_progress, should_cancel)
 
