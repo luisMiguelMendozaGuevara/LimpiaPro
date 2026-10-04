@@ -91,6 +91,70 @@ def _run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(args, cwd=PROJECT_ROOT, check=check, text=True)
 
 
+def _signtool() -> Path | None:
+    """Locate signtool.exe (Windows SDK) if it is installed."""
+    from shutil import which
+    found = which("signtool")
+    if found:
+        return Path(found)
+    kits = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+    for candidate in sorted((kits / "Windows Kits" / "10" / "bin").glob(
+            "*/x64/signtool.exe"), reverse=True):
+        return candidate
+    return None
+
+
+def sign_binary(path: Path) -> bool:
+    """Sign a built artifact with Authenticode, when a certificate exists.
+
+    Signing is what actually removes the SmartScreen/antivirus warnings for
+    end users: unsigned downloads get "Windows protected your PC" and are
+    frequently quarantined. Configure ONE of these environment variables
+    (see docs/CODE_SIGNING.md) and the release pipeline signs every exe and
+    the installer automatically:
+
+      LIMPIAPRO_SIGN_PFX        path to a .pfx/.p12 certificate
+      LIMPIAPRO_SIGN_PFX_PASS   its password (optional)
+      LIMPIAPRO_SIGN_THUMBPRINT SHA-1 of a certificate installed in the store
+
+    Without configuration the step is skipped: the release still works, it
+    just keeps the unsigned-file warnings.
+
+    Args:
+        path: The artifact to sign.
+
+    Returns:
+        bool: True when the file was signed.
+    """
+    pfx = os.environ.get("LIMPIAPRO_SIGN_PFX")
+    thumbprint = os.environ.get("LIMPIAPRO_SIGN_THUMBPRINT")
+    if not pfx and not thumbprint:
+        return False
+    tool = _signtool()
+    if tool is None:
+        print("WARNING: a signing certificate is configured but signtool.exe "
+              "was not found (install the Windows SDK). Skipping signing.")
+        return False
+    command = [str(tool), "sign", "/fd", "sha256",
+               "/tr", "http://timestamp.digicert.com", "/td", "sha256"]
+    if pfx:
+        command += ["/f", pfx]
+        password = os.environ.get("LIMPIAPRO_SIGN_PFX_PASS")
+        if password:
+            command += ["/p", password]
+    else:
+        command += ["/sha1", thumbprint]
+    command.append(str(path))
+    print(f"Signing {path.name} ...")
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"WARNING: signing {path.name} failed: "
+              f"{result.stdout.strip()} {result.stderr.strip()}")
+        return False
+    print(f"Signed: {path.name}")
+    return True
+
+
 def _inno_setup_compiler() -> Path | None:
     """Locate Inno Setup's command-line compiler (ISCC.exe).
 

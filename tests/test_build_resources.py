@@ -33,6 +33,39 @@ def test_no_spec_enables_upx():
         assert "upx=False" in text, f"{spec_name} does not pin upx=False"
 
 
+def test_every_spec_embeds_a_version_resource():
+    """Every spec must pass version=write_version_file(...) to EXE().
+
+    A frozen exe with an empty version resource looks anonymous to
+    Windows Explorer and antivirus heuristics (this shipped unnoticed
+    once); pinning it here keeps the metadata in sync with APP_VERSION.
+    """
+    for spec_name in SPECS:
+        text = (ROOT / spec_name).read_text(encoding="utf-8")
+        assert "write_version_file" in text, \
+            f"{spec_name} does not generate a version resource"
+        assert "version=write_version_file" in text, \
+            f"{spec_name} does not pass version= to EXE()"
+
+
+def test_version_resource_matches_app_version():
+    import sys
+
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(ROOT / "installer"))
+    from pyinstaller_common import parse_version, version_file_text
+
+    from limpiapro import APP_VERSION
+
+    assert parse_version("2.11.3") == (2, 11, 3, 0)
+    assert parse_version(APP_VERSION)[:3] == tuple(
+        int(p) for p in APP_VERSION.split(".")[:3])
+    text = version_file_text("LimpiaPro", APP_VERSION, "LimpiaPro.exe")
+    assert APP_VERSION in text
+    assert "CompanyName" in text and "FileVersion" in text
+
+
 def test_stylesheet_has_no_unsubstituted_tokens():
     from limpiapro.ui.theme import build_stylesheet
     rendered = build_stylesheet(accent="#0067c0", dark=True)
