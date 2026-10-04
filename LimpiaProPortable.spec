@@ -61,7 +61,7 @@ exe = EXE(
     icon=['assets/limpiadora.ico'],
     # Author/product metadata (CompanyName, FileVersion...): a frozen exe
     # with an empty version resource looks anonymous to Windows and AV.
-    version=write_version_file(os.path.join(WORKPATH, "version_info"),
+    version=write_version_file(os.path.join(workpath, "version_info"),
                                APP_NAME, APP_VERSION, "LimpiaPro.exe"),
 )
 

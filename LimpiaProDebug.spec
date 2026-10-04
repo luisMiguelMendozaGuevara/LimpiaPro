@@ -59,7 +59,7 @@ exe = EXE(
     entitlements_file=None,
     icon=['assets/limpiadora.ico'],
     # Author/product metadata (CompanyName, FileVersion...).
-    version=write_version_file(os.path.join(WORKPATH, "version_info"),
+    version=write_version_file(os.path.join(workpath, "version_info"),
                                APP_NAME, APP_VERSION, "LimpiaProDebug.exe"),
 )
 

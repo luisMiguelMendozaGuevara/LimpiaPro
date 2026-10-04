@@ -48,6 +48,18 @@ def test_every_spec_embeds_a_version_resource():
             f"{spec_name} does not pass version= to EXE()"
 
 
+def test_specs_use_pyinstaller_globals_only():
+    """A spec runs inside PyInstaller's restricted namespace, which exposes
+    ``workpath``/``DISTPATH``/``SPECPATH`` but NOT ``WORKPATH``. Referencing
+    an undefined global aborts the build with NameError, so pin the casing."""
+    for spec_name in SPECS:
+        text = (ROOT / spec_name).read_text(encoding="utf-8")
+        assert "WORKPATH" not in text, \
+            f"{spec_name} uses WORKPATH; PyInstaller defines lowercase workpath"
+        assert "os.path.join(workpath," in text, \
+            f"{spec_name} does not write the version file under workpath"
+
+
 def test_version_resource_matches_app_version():
     import sys
 
