@@ -60,6 +60,16 @@ def test_specs_use_pyinstaller_globals_only():
             f"{spec_name} does not write the version file under workpath"
 
 
+def test_debug_spec_is_a_console_build_without_bootloader_debug():
+    """The troubleshooting variant only needs ``console=True``; the EXE
+    bootloader debug path (``debug=True``) aborts the PyInstaller 6.22.2
+    build on this toolchain (exit -1), so it must stay off."""
+    text = (ROOT / "LimpiaProDebug.spec").read_text(encoding="utf-8")
+    assert "console=True" in text, "LimpiaProDebug.spec is not a console build"
+    assert "\n    debug=False," in text, \
+        "LimpiaProDebug.spec re-enabled the crashing EXE bootloader debug path"
+
+
 def test_version_resource_matches_app_version():
     import sys
 

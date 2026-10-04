@@ -44,7 +44,10 @@ exe = EXE(
     a.datas,
     [],
     name='LimpiaProDebug',
-    debug=True,
+    # console=True is what makes this the troubleshooting variant; the
+    # bootloader debug path (debug=True) makes PyInstaller 6.22.2 abort
+    # (exit -1) on this toolchain, so it stays off.
+    debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     # UPX OFF: see LimpiaPro.spec (AV false positives).
